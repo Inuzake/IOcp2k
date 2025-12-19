@@ -103,20 +103,19 @@ module load cp2k/2024.3\n
                           "_RESTART_" : 0, "_RES_FILE_" : "initial.restart",
                           # THE FULL RESTART FILE PATH TO KEEP TRACK OF WHAT WE DO
                           "_full_RES_FILE_" : None,
-                          # Where to find the basis set and basis and pseudo file
-                          "_BASIS_POT_PATH_" :  "/ccc/work/cont003/gen2309/sicilana/DATA_CP2K", "_BASIS_FILE_" : "GTH_BASIS_SETS",
-                          "_POT_FILE_" : "GTH_POTENTIALS",
+                          # Where to find the basis set
+                          "_BASIS_POT_PATH_" :  "/ccc/work/cont003/gen2309/sicilana/DATA_CP2K",
                           # VDW INTERACTION, VDW FUNCTIONAL and WHICH ATOM TO EXCLUDE FROM VDW
-                          "_VDW_" : 1, "_VWD3_FUNCTIONAL_" : None, "_VdW_EXCLU_" : 0, "_VWD3_EXCLUDE_ATOM_" : 3,
+                          "_VDW_" : 1, "_VWD3_FUNCTIONAL_" : None, "_VWD3_EXCLUDE_ATOM_" : None,
                           "_RCvdw_" : 12, 
                           # THE SMOOTHING OF THE DENSITY
-                          "_XC_SMOOTH_RHO_" : "NONE", "_XC_DERIV_" :  "PW",
+                          "_USE_SMOOTH_" : 1, "_XC_SMOOTH_RHO_" : "NN50", "_XC_DERIV_" :  "NN50_SMOOTH",
                           # CUTOFF in RYDBERG AND NUMBER OF GRIDS
                           "_CUTOFF_" : 600, "_REL_CTOFF_" : 60, "_NGRIDS_" : 4, 
                           # The functional
                           "_CP2K_XC_FUNCTIONAL_" : None,
                           # GPAW
-                          "_USE_GAPW_" : 1,
+                          "_USE_GPAW_" : 1,
                           # OT PARAMETERS
                           "_OT_PRECONDITIONER_" : "FULL_SINGLE_INVERSE",
                           "_OT_MINIMIZER_" : "DIIS",
@@ -136,6 +135,7 @@ module load cp2k/2024.3\n
                           "_USE_BERRY_" : 0,
                           # COMPUTE HOMO LUMO GAPS EVERY STEPS
                           "_N_HL_GAL_PRINT_" : 200}
+
 
         # tHIS IS SET TO TRUE AFTER CALLING initialize
         self.initialized = False
@@ -189,14 +189,14 @@ module load cp2k/2024.3\n
 
         self.cluster_dict = copy.deepcopy(cluster_dict)
 
-        if "NPT" in self.cp2k_dict["_CALCTYPE_"] and bool(self.cp2k_dict["_XC_SMOOTH_RHO_"]!="NONE"):
+        if "NPT" in self.cp2k_dict["_CALCTYPE_"] and bool(self.cp2k_dict["_USE_SMOOTH_"]):
             raise ValueError("The smoothing procedure to get the pressure should be tested")
 
-        if "NVT" in self.cp2k_dict["_CALCTYPE_"] and not bool(self.cp2k_dict["_XC_SMOOTH_RHO_"]!="NONE"):
-            #raise ValueWarning("In NVT considering the smoothing procedure")
-            print("WARNING: consider using the smoothing procedure in NVT")
+        if "NVT" in self.cp2k_dict["_CALCTYPE_"] and not bool(self.cp2k_dict["_USE_SMOOTH_"]):
+            raise ValueError("In NVT considering the smoothing procedure")
+
         # Check that the CP2k functional and the parameterization of the VDW are consistent
-        # Otherwis an error wil be raised
+        # Otherwis an erro wil be raised
         dft_functional_used  = self.cp2k_dict["_CP2K_XC_FUNCTIONAL_"].split()[1]
         # Check for a specific parametrization of the XC functional
         if "PARAMETRIZATION" in self.cp2k_dict["_CP2K_XC_FUNCTIONAL_"].split():
@@ -219,16 +219,14 @@ module load cp2k/2024.3\n
         """
         CREATE THE INPUT FOR NPT SIMULATIONS in CP2K
         """
-
+        
         input_text = """@SET RESTART        _RESTART_
 
 @SET BASIS_POT_PATH _BASIS_POT_PATH_
-@SET BASIS_FILE     _BASIS_FILE_
-@SET POT_FILE       _POT_FILE_
 @SET SYSTEM         _SYSTEM_
 @SET VDW            _VDW_
-@SET VDW_EXCLU      _VdW_EXCLU_
-@SET USE_GAPW       _USE_GAPW_
+@SET USE_SMOOTH     _USE_SMOOTH_
+@SET USE_GPAW       _USE_GPAW_
 @SET PRINT_P_BERRY  _USE_BERRY_
 @SET PRINT_HL_GAP   _N_HL_GAL_PRINT_
         
@@ -245,8 +243,8 @@ module load cp2k/2024.3\n
   STRESS_TENSOR ANALYTICAL
 
   &DFT
-    BASIS_SET_FILE_NAME ${BASIS_POT_PATH}/${BASIS_FILE}
-    POTENTIAL_FILE_NAME ${BASIS_POT_PATH}/${POT_FILE}
+    BASIS_SET_FILE_NAME ${BASIS_POT_PATH}/GTH_BASIS_SETS
+    POTENTIAL_FILE_NAME ${BASIS_POT_PATH}/GTH_POTENTIALS
     &MGRID
       CUTOFF [Ry]       _CUTOFF_
       NGRIDS            _NGRIDS_
@@ -257,7 +255,7 @@ module load cp2k/2024.3\n
       EPS_DEFAULT 1.0E-14    # def=1.0E-10
       EXTRAPOLATION ASPC     #Extrapolation strategy for the wavefunction during MD
       #EXTRAPOLATION_ORDER 3 #Default is 3
-      @IF ${USE_GAPW}
+      @IF ${USE_GPAW}
           METHOD GAPW          # Gaussian Augumented Plane Waves
           QUADRATURE   GC_LOG  # Algorithm to construct the atomic radial grid for GAPW
           EPSFIT       1.E-6   # Precision to give the extension of a hard gaussian
@@ -286,36 +284,29 @@ module load cp2k/2024.3\n
 
       _CP2K_XC_FUNCTIONAL_
       
+      @IF ${USE_SMOOTH}
       &XC_GRID
          XC_SMOOTH_RHO  _XC_SMOOTH_RHO_
          XC_DERIV       _XC_DERIV_
       &END XC_GRID
-
+      @ENDIF
+        
       @IF ${VDW}
       &vdW_POTENTIAL
         DISPERSION_FUNCTIONAL PAIR_POTENTIAL
         &PAIR_POTENTIAL
-#          TYPE DFTD3
-#          CALCULATE_C9_TERM .TRUE. # Include the 3-body term
-#          REFERENCE_C9_TERM .TRUE. 
-#          PARAMETER_FILE_NAME ${BASIS_POT_PATH}/dftd3.dat
-#          VERBOSE_OUTPUT .TRUE.
-#          REFERENCE_FUNCTIONAL _VWD3_FUNCTIONAL_
-#          R_CUTOFF [angstrom] _RCvdw_ # def=10 angstrom
-#          EPS_CN 1.0E-6 # def=1.0E-6 dp cutoff value for coordination number function
           TYPE DFTD3
-          LONG_RANGE_CORRECTION .TRUE.
+          CALCULATE_C9_TERM .TRUE. # Include the 3-body term
+          REFERENCE_C9_TERM .TRUE. 
           PARAMETER_FILE_NAME ${BASIS_POT_PATH}/dftd3.dat
           VERBOSE_OUTPUT .TRUE.
-          REFERENCE_FUNCTIONAL PBE
-          R_CUTOFF [angstrom] 10.0
-          EPS_CN 1.0E-6
-          @IF ${VDW_EXCLU}
-            D3_EXCLUDE_KIND _VWD3_EXCLUDE_ATOM_ # Exclude the Na atom type 3
-          @ENDIF
+          REFERENCE_FUNCTIONAL _VWD3_FUNCTIONAL_
+          R_CUTOFF [angstrom] _RCvdw_ # def=10 angstrom 
+          D3_EXCLUDE_KIND _VWD3_EXCLUDE_ATOM_ # Exclude the Na atom type 3
         &END PAIR_POTENTIAL
       &END vdW_POTENTIAL
       @ENDIF
+
     &END XC
 
     &PRINT
@@ -376,7 +367,7 @@ module load cp2k/2024.3\n
     &END THERMOSTAT
     &BAROSTAT
 	   PRESSURE [bar]  _PRESSURE_
-     TIMECON  [fs]   _TIMECONCONPRESS_
+       TIMECON  [fs]   _TIMECONCONPRESS_
     &END BAROSTAT
   &END MD
 
@@ -729,7 +720,6 @@ module load cp2k/2024.3\n
             raise ValueError("Partition name not valid")
     
         myQOS = "normal"
-        myQOS = self.cluster_dict["qos"]
         if self.cluster_dict["time"] > 60 * 60 * 24:
             myQOS = "long"
     
@@ -795,25 +785,19 @@ cd {}
     
 """.format(os.path.join(self.cluster_dict["cluster_scratch"], execution_dir),
                self.cluster_dict["mpirun"],  self.cluster_dict["exe"], myfile))
-
+    
         if batch_index > 0:
             final_dir  = execution_dir.replace("BATCH_{}".format(batch_index), "BATCH_{}".format(batch_index + 1))
             final_path = os.path.join(self.cluster_dict["cluster_scratch"], final_dir)
-            #check on the convergence of the SCF caclculation with if
-            # If converged, Go in the next directory and run the new job
-            # Change the restart
-            file.write("""
-if grep -q "SCF run NOT" output.out || grep -q "ABORT" output.out; then
-                       echo 'WARNING : run not converged or job aborted
-                       Next job cancelled'
-else
-                       cp ./{}-1.restart {}
+            file.write("cp ./{}-1.restart {}\n\n".format(self.cp2k_dict["_SYSTEM_"], os.path.join(final_path, self.cp2k_dict["_RES_FILE_"])))
 
-                      cd {}
-                      chmod g+s ./*
-                      {} run.sh
-fi
-                       """.format(self.cp2k_dict["_SYSTEM_"], os.path.join(final_path, self.cp2k_dict["_RES_FILE_"]), final_path, self.cluster_dict['run_job']))        
+            # TODO Add a check on the convergence of the SCF caclcualtion
+            # Go in the next directory and run the new job
+            file.write("cd {}\n".format(final_path))
+            # Chagne the restart
+            file.write("chmod g+s ./*\n")
+            file.write("{} run.sh\n".format(self.cluster_dict['run_job']))
+        
         
         file.close()
     
