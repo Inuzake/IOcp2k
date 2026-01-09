@@ -12,9 +12,8 @@ import json
 import subprocess
 
 from datetime import datetime
-"""azdazdazdazdaz
-azdazdazdaz
-dazdazdazdazd"""
+
+
 class AtomicBunches:
     """
     CREATE BUNCHES OF CP2K INPUT FILES TO RUN ON YOUR FAVORITE CLUSTER
@@ -97,19 +96,21 @@ module load cp2k/2024.3\n
         # CP2k #
         ########
         # Create the dictionary
-        self.cp2k_dict = {# TYPE OF CALC
+        self.cp2k_dict = {# TYPE OF RUN
+                          "_RTYPE_" : "MD",
+                          # TYPE OF ENSEMBLE
                           "_CALCTYPE_" : "NVT", 
                           # SYSTEM NAME IN CP2k
                           "_SYSTEM_" : "brines",
                           # IF YOU WANT TO RESTART THE CALCULATION SET RESTART TO 1
-                          "_RESTART_" : 0, "_RES_FILE_" : "initial.restart",
+                          "_REST_" : 0, "_RES_FILE_" : "initial.restart", "_RES_WFN_FILE_" : "initial.wfn",
                           # THE FULL RESTART FILE PATH TO KEEP TRACK OF WHAT WE DO
                           "_full_RES_FILE_" : None,
                           # Where to find the basis set and basis and pseudo file
                           "_BASIS_POT_PATH_" :  "/ccc/work/cont003/gen2309/sicilana/DATA_CP2K", "_BASIS_FILE_" : "GTH_BASIS_SETS",
                           "_POT_FILE_" : "GTH_POTENTIALS",
                           # VDW INTERACTION, VDW FUNCTIONAL and WHICH ATOM TO EXCLUDE FROM VDW
-                          "_VDW_" : 1, "_VWD3_FUNCTIONAL_" : None, "_VdW_EXCLU_" : 0, "_VWD3_EXCLUDE_ATOM_" : 3,
+                          "_VDW_" : 1, "_VDW3_FUNCTIONAL_" : None, "_VdW_EXCLU_" : 0, "_VDW3_EXCLUDE_ATOM_" : 3,
                           "_RCvdw_" : 12, 
                           # THE SMOOTHING OF THE DENSITY
                           "_XC_SMOOTH_RHO_" : "NONE", "_XC_DERIV_" :  "PW",
@@ -117,6 +118,10 @@ module load cp2k/2024.3\n
                           "_CUTOFF_" : 600, "_REL_CTOFF_" : 60, "_NGRIDS_" : 4, 
                           # The functional
                           "_CP2K_XC_FUNCTIONAL_" : None,
+                          # ADMM (for hybrid functional)
+                          "_ADMM_" : 0, "_BASIS_AUX_FILE_" : "BASIS_ADMM_UZH",
+                          # Extrapolation strategy for the wavefunction
+                          "_EXTRAPOLATION_" : "ASPC", "_EXTRA_ORDER_" : "3",
                           # GPAW
                           "_USE_GAPW_" : 1,
                           # OT PARAMETERS
@@ -204,8 +209,10 @@ module load cp2k/2024.3\n
         if "PARAMETRIZATION" in self.cp2k_dict["_CP2K_XC_FUNCTIONAL_"].split():
             index = self.cp2k_dict["_CP2K_XC_FUNCTIONAL_"].split().index("PARAMETRIZATION")
             dft_functional_used = self.cp2k_dict["_CP2K_XC_FUNCTIONAL_"].split()[index + 1]
-        if self.cp2k_dict["_VWD3_FUNCTIONAL_"] != dft_functional_used:
-            raise ValueError("The DFT xc is {} whereas the D3 parametrization is {}".format(dft_functional_used, self.cp2k_dict["_VWD3_FUNCTIONAL_"]))
+        if "SCALE_C" in self.cp2k_dict["_CP2K_XC_FUNCTIONAL_"].split():
+            dft_functional_used = "PBE0"
+        if self.cp2k_dict["_VDW3_FUNCTIONAL_"] != dft_functional_used:
+            raise ValueError("The DFT xc is {} whereas the D3 parametrization is {}".format(dft_functional_used, self.cp2k_dict["_VDW3_FUNCTIONAL_"]))
 
         if not ".xyz" in self.structure_file:
             raise ValueError("Please use a xyz file structure in ANGSTROM")
@@ -222,10 +229,12 @@ module load cp2k/2024.3\n
         CREATE THE INPUT FOR NPT SIMULATIONS in CP2K
         """
 
-        input_text = """@SET RESTART        _RESTART_
-
+        input_text = """
+@SET RESTART        _REST_
+@SET RTYPE          _RTYPE_
 @SET BASIS_POT_PATH _BASIS_POT_PATH_
 @SET BASIS_FILE     _BASIS_FILE_
+@SET BASIS_AUX_FILE _BASIS_AUX_FILE_ 
 @SET POT_FILE       _POT_FILE_
 @SET SYSTEM         _SYSTEM_
 @SET VDW            _VDW_
@@ -233,10 +242,11 @@ module load cp2k/2024.3\n
 @SET USE_GAPW       _USE_GAPW_
 @SET PRINT_P_BERRY  _USE_BERRY_
 @SET PRINT_HL_GAP   _N_HL_GAL_PRINT_
+@SET ADMM           _ADMM_
         
 &GLOBAL
   PROJECT     ${SYSTEM}
-  RUN_TYPE    MD
+  RUN_TYPE    ${RTYPE}
   PRINT_LEVEL LOW
   FLUSH_SHOULD_FLUSH 
 &END GLOBAL
@@ -244,11 +254,22 @@ module load cp2k/2024.3\n
 &FORCE_EVAL
 
   METHOD QuickStep
+
+  @IF ( ${RTYPE} /= ENERGY_FORCE)
   STRESS_TENSOR ANALYTICAL
+  @ENDIF
 
   &DFT
     BASIS_SET_FILE_NAME ${BASIS_POT_PATH}/${BASIS_FILE}
+    @IF ADMM
+    BASIS_SET_FILE_NAME ${BASIS_POT_PATH}/${BASIS_AUX_FILE}
+    @ENDIF
     POTENTIAL_FILE_NAME ${BASIS_POT_PATH}/${POT_FILE}
+
+    @IF ${RESTART}
+    WFN_RESTART_FILE_NAME _RES_WFN_FILE_
+    @ENDIF
+
     &MGRID
       CUTOFF [Ry]       _CUTOFF_
       NGRIDS            _NGRIDS_
@@ -257,8 +278,8 @@ module load cp2k/2024.3\n
 
     &QS
       EPS_DEFAULT 1.0E-14    # def=1.0E-10
-      EXTRAPOLATION ASPC     #Extrapolation strategy for the wavefunction during MD
-      #EXTRAPOLATION_ORDER 3 #Default is 3
+      EXTRAPOLATION _EXTRAPOLATION_    #Extrapolation strategy for the wavefunction, ASPC recommended for MD, PS for SPE
+      EXTRAPOLATION_ORDER _EXTRA_ORDER_   #Default is 3
       @IF ${USE_GAPW}
           METHOD GAPW          # Gaussian Augumented Plane Waves
           QUADRATURE   GC_LOG  # Algorithm to construct the atomic radial grid for GAPW
@@ -272,6 +293,9 @@ module load cp2k/2024.3\n
     &END QS
 
     &SCF
+      @IF ${RESTART}
+      SCF_GUESS RESTART
+      @ENDIF
       EPS_SCF 1.0E-7 # def=1.0E-5 the exponent should be half of EPS_DEFAULT
       MAX_SCF 50   # def=50
       &OUTER_SCF
@@ -297,33 +321,39 @@ module load cp2k/2024.3\n
       &vdW_POTENTIAL
         DISPERSION_FUNCTIONAL PAIR_POTENTIAL
         &PAIR_POTENTIAL
-#          TYPE DFTD3
 #          CALCULATE_C9_TERM .TRUE. # Include the 3-body term
-#          REFERENCE_C9_TERM .TRUE. 
-#          PARAMETER_FILE_NAME ${BASIS_POT_PATH}/dftd3.dat
-#          VERBOSE_OUTPUT .TRUE.
-#          REFERENCE_FUNCTIONAL _VWD3_FUNCTIONAL_
-#          R_CUTOFF [angstrom] _RCvdw_ # def=10 angstrom
-#          EPS_CN 1.0E-6 # def=1.0E-6 dp cutoff value for coordination number function
+#          REFERENCE_C9_TERM .TRUE.
           TYPE DFTD3
           LONG_RANGE_CORRECTION .TRUE.
           PARAMETER_FILE_NAME ${BASIS_POT_PATH}/dftd3.dat
           VERBOSE_OUTPUT .TRUE.
-          REFERENCE_FUNCTIONAL PBE
-          R_CUTOFF [angstrom] 10.0
-          EPS_CN 1.0E-6
+          REFERENCE_FUNCTIONAL _VDW3_FUNCTIONAL_
+          R_CUTOFF [angstrom] _RCvdw_ # def=10 angstrom
+          EPS_CN 1.0E-6  # def=1.0E-6 dp cutoff value for coordination number function
           @IF ${VDW_EXCLU}
-            D3_EXCLUDE_KIND _VWD3_EXCLUDE_ATOM_ # Exclude the Na atom type 3
+            D3_EXCLUDE_KIND _VDW3_EXCLUDE_ATOM_ # Exclude the Na atom type 3
           @ENDIF
         &END PAIR_POTENTIAL
       &END vdW_POTENTIAL
       @ENDIF
     &END XC
 
+    @IF ADMM
+    &AUXILIARY_DENSITY_MATRIX_METHOD
+      ADMM_TYPE ADMM2
+      EXCH_CORRECTION_FUNC PBEX
+    &END AUXILIARY_DENSITY_MATRIX_METHOD
+    @ENDIF
+
     &PRINT
         &MO_CUBES
             &EACH
-              MD  ${PRINT_HL_GAP}
+              @IF (${RTYPE} = ENERGY_FORCE)
+              JUST_ENERGY  ${PRINT_HL_GAP}
+              @ENDIF
+              @IF (${RTYPE} = MD)
+              MD ${PRINT_HL_GAP}
+              @ENDIF
             &END EACH
             NHOMO        2
             NLUMO       10
@@ -337,7 +367,12 @@ module load cp2k/2024.3\n
             ADD_LAST NUMERIC
             REFERENCE COM
             &EACH
+              @IF (${RTYPE} = ENERGY_FORCE)
+              JUST_ENERGY 1
+              @ENDIF
+              @IF (${RTYPE} = MD)
               MD 1
+              @ENDIF
             &END EACH
         &END MOMENTS
         @ENDIF
@@ -345,6 +380,16 @@ module load cp2k/2024.3\n
     &END PRINT
 
   &END DFT
+
+  @IF (${RTYPE} = ENERGY_FORCE )
+  &PRINT
+    &FORCES
+      &EACH JUST_ENERGY
+      &END EACH
+      ADD_LAST NUMERIC
+    &END FORCES
+  &END PRINT
+  @ENDIF
 
   &SUBSYS
 
@@ -364,6 +409,7 @@ module load cp2k/2024.3\n
 
 &END FORCE_EVAL
 
+@IF ( ${RTYPE} /= ENERGY_FORCE)
 &MOTION
   &MD
     ENSEMBLE      _CALCTYPE_
@@ -433,6 +479,7 @@ module load cp2k/2024.3\n
   &END PRINT
 
 &END MOTION
+@ENDIF
 
 @if ${RESTART}
 &EXT_RESTART
@@ -458,6 +505,7 @@ module load cp2k/2024.3\n
             # print(input_text == pre_input_text)
             # print(input_text)
             if input_text == pre_input_text and not(key in ["_full_RES_FILE_"]):
+                print(input_text)
                 raise ValueError("KEY {} NOT FOUND, please check the text of the cp2k calculation".format(key))
 
         
@@ -515,7 +563,7 @@ module load cp2k/2024.3\n
 
 
 
-    def make_batches(self, custom_cluster_function = None):
+    def make_batches(self, custom_cluster_function = "IRENE"):
         """
         CREATE THE BATCHES 
         ===================
@@ -534,10 +582,13 @@ module load cp2k/2024.3\n
         if not self.initialized:
             raise ValueError('Before creating the batche run the initialize method')
             
-        if custom_cluster_function is None:
-            print("RUNNING ON IRENE\n")
+        if custom_cluster_function == "IRENE":
+            print("\nRUNNING ON IRENE\n")
             custom_cluster_function = self.create_run_file_irene
-        
+        elif custom_cluster_function == "PARACELSUS":
+            print("\nRUNNING ON PARACELSUS\n")
+            custom_cluster_function = self.create_run_file_paracelsus
+
         # A list with all the execution dir containing a run.sh file
         execution_dir_list = []
 
@@ -545,14 +596,20 @@ module load cp2k/2024.3\n
         for batch in range(self.n_batches_min, (self.n_batches + self.n_batches_min) ):
         
             # The execution directory
-            execution_dir =  "BATCH_{:d}_MD_T_{:d}_steps_{:d}_dt_{:.1f}_".format(batch, self.cp2k_dict["_TEMPERATURE_"],
-                                                                                 self.cp2k_dict["_STEPS_"],
-                                                                                 self.cp2k_dict["_TIMESTEP_"])
-            if self.cp2k_dict["_CALCTYPE_"] == "NPT_I":
-                execution_dir =  "BATCH_{:d}_MD_T_{:d}_P_{:d}_steps_{:d}_dt_{:.1f}_".format(batch, self.cp2k_dict["_TEMPERATURE_"],
-                                                                                            self.cp2k_dict["_PRESSURE_"],
-                                                                                            self.cp2k_dict["_STEPS_"],
-                                                                                            self.cp2k_dict["_TIMESTEP_"])
+            if self.cp2k_dict["_RTYPE_"] == "MD":
+              execution_dir =  "BATCH_{:d}_MD_T_{:d}_steps_{:d}_dt_{:.1f}_".format(batch, self.cp2k_dict["_TEMPERATURE_"],
+                                                                                    self.cp2k_dict["_STEPS_"],
+                                                                                    self.cp2k_dict["_TIMESTEP_"])
+              if self.cp2k_dict["_CALCTYPE_"] == "NPT_I":
+                  execution_dir =  "BATCH_{:d}_MD_T_{:d}_P_{:d}_steps_{:d}_dt_{:.1f}_".format(batch, self.cp2k_dict["_TEMPERATURE_"],
+                                                                                              self.cp2k_dict["_PRESSURE_"],
+                                                                                              self.cp2k_dict["_STEPS_"],
+                                                                                              self.cp2k_dict["_TIMESTEP_"])
+            elif self.cp2k_dict["_RTYPE_"] == "ENERGY_FORCE":
+                execution_dir = f"BATCH_{batch:d}_SPE_conf_{self.cp2k_dict['_STEPS_']:d}_"
+            else:
+                print(f"Run type {self.cp2k_dict["_RTYPE"]} not implemented")
+                raise NotImplementedError("Please, choose between MD or ENERGY_FORCE")
                 
             # Add the structure file without the extension
             execution_dir += os.path.basename(self.structure_file)[:-4] 
@@ -573,13 +630,13 @@ module load cp2k/2024.3\n
                 SURE_scratch = input('Are you ok with this decision? YES or NO ')
                 if SURE_scratch == "NO":
                     raise ValueError("The scratch dir is not correct according to you! The creation of the batches has been killed!")
-                self.cp2k_dict["_RESTART_"]       = int(np.copy(self.restart))
+                self.cp2k_dict["_REST_"]       = int(np.copy(self.restart))
                 self.cp2k_dict["_full_RES_FILE_"] = copy.deepcopy(self.restart_file)
  
             # If it is not the first batch we should force the restart from the previous batch
             else:
                 # Update this variable of cp2k dictionary
-                self.cp2k_dict["_RESTART_"]       = 1
+                self.cp2k_dict["_REST_"]       = 1
                 # self.cp2k_dict["_full_RES_FILE_"] = os.path.join(self.cluster_dict["cluster_scratch"], execution_dir_list[-2])
                 self.cp2k_dict["_full_RES_FILE_"] = os.path.join(self.local_path, execution_dir_list[-2])
            
@@ -593,7 +650,7 @@ module load cp2k/2024.3\n
             # Copy the structure file previously built .xyz (obtained from a structural relaxation)
             subprocess.run(["cp", self.structure_file, os.path.join("./", self.cp2k_dict["_COORD_FILE_NAME_"])], check = True)
 
-            # Copy the restaart file of a previous batch if this is the first batch to submit
+            # Copy the restart file of a previous batch if this is the first batch to submit
             if batch == self.n_batches_min:
                 if self.restart:
                     #Copy the restart file previously built
@@ -711,7 +768,102 @@ module load cp2k/2024.3\n
 #         file.close()
 
 
+    def create_run_file_paracelsus(self, batch_index, execution_dir):
+        """
+        CREATES THE RUN.SH FILE FOR PARACELSUS (ENS CLUSTER)
+        =================================
 
+        Parameters:
+        -----------
+            -batch_index: int used as label for the job name and for submitting the next batch calculation, -1 if it is the last batch to submit
+            -execution_dir: the dir containing the run.sh file and all the inputs needed by cp2k
+        """
+    
+        avail_partitions = ["qAVX0", "qAVX1", "qAVX2", "qEPYC"]
+        # Chek if the partition is ok
+        if not (self.cluster_dict["partition_name"] in avail_partitions):
+            raise ValueError("Partition name not valid")
+
+    
+        # Check if the number of NODES are correct
+        if self.cluster_dict["partition_name"] == avail_partitions[0]:
+            if self.cluster_dict["ncpus"] % 12 != 0:
+                exp_nodes = 1 + self.cluster_dict["ncpus"] // 12  
+            else:
+                exp_nodes = self.cluster_dict["ncpus"] // 12
+        elif self.cluster_dict["partition_name"] == avail_partitions[1]:
+            if self.cluster_dict["ncpus"] % 16 != 0:
+                exp_nodes = 1 + self.cluster_dict["ncpus"] // 16  
+            else:
+                exp_nodes = self.cluster_dict["ncpus"] // 16
+        elif self.cluster_dict["partition_name"] == avail_partitions[2]:
+            if self.cluster_dict["ncpus"] % 20 != 0:
+                exp_nodes = 1 + self.cluster_dict["ncpus"] // 20  
+            else:
+                exp_nodes = self.cluster_dict["ncpus"] // 20
+        else:
+            if self.cluster_dict["ncpus"] % 64 != 0:
+                exp_nodes =  1 + self.cluster_dict["ncpus"] // 64
+            else:
+                exp_nodes = self.cluster_dict["ncpus"] // 64
+            
+        
+        if exp_nodes != self.cluster_dict["nnodes"]:
+            print("PARACELSUS| The expected number of nodes is {} but you choose {} for {} cpus".format(exp_nodes,self.cluster_dict["nnodes"],self.cluster_dict["ncpus"]))
+            raise ValueError("PARACELSUS| The number of nodes is not correct, the job will crash")
+    
+        
+        file = open("run.sh", "w")
+        
+        file.write(f"""#!/bin/bash
+#SBATCH --job-name={self.cluster_dict["job_name"]}_{batch_index:d}
+#SBATCH --export=ALL,MODULEPATH='',MODULEHOME=''  # Compulsory
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=aurelien.zavadil@ens.psl.eu
+#SBATCH --time={self.cluster_dict["time"]}
+#SBATCH --nodes={self.cluster_dict["nnodes"]}
+#SBATCH --ntasks={self.cluster_dict["ncpus"]}
+#-SBATCH --ntasks-per-node=1    # of MPI tasks/node: @qAVX0 max 8|12, @qAVX1 12|16, @qAVX2 max 20, @EPYC 64
+#SBATCH --cpus-per-task=1       # of OMP threads/task (default =  1)
+#SBATCH --ntasks-per-core=1     # HT (default = 1, HyperThreads = 2)
+#SBATCH --partition={self.cluster_dict["partition_name"]} # qAVX0 | qAVX1 | qAVX2 | qEPYC | qGPU
+
+{self.cluster_dict["module_load"]}
+        
+""")
+
+        allfiles = os.listdir("./")
+        for myfile in allfiles:
+            if myfile.endswith(".inp"):
+                print("PARACELSUS| You are running {} \n".format(myfile))
+                file.write("""
+cd {}
+{} {} -i {} -o output.out
+    
+""".format(os.path.join(self.cluster_dict["cluster_scratch"], execution_dir),
+               self.cluster_dict["mpirun"],  self.cluster_dict["exe"], myfile))
+
+        if batch_index > 0:
+            final_dir  = execution_dir.replace("BATCH_{}".format(batch_index), "BATCH_{}".format(batch_index + 1))
+            final_path = os.path.join(self.cluster_dict["cluster_scratch"], final_dir)
+            #check on the convergence of the SCF caclculation with if
+            # If converged, Go in the next directory and run the new job
+            # Change the restart
+            file.write(f"""
+if grep -q "SCF run NOT" output.out || grep -q "ABORT" output.out; then
+  echo 'WARNING : run not converged or job aborted
+    Next job cancelled'
+else
+  cp ./{self.cp2k_dict["_SYSTEM_"]}-1.restart {os.path.join(final_path, self.cp2k_dict["_RES_FILE_"])}
+  cp ./{self.cp2k_dict["_SYSTEM_"]}-RESTART.wfn {os.path.join(final_path, self.cp2k_dict["_RES_WFN_FILE_"])}
+                       
+  cd {final_path}
+  chmod g+s ./*
+  {self.cluster_dict['run_job']} run.sh
+fi
+""")        
+        
+        file.close()
     
 
     def create_run_file_irene(self, batch_index, execution_dir):
@@ -735,7 +887,7 @@ module load cp2k/2024.3\n
         if self.cluster_dict["time"] > 60 * 60 * 24:
             myQOS = "long"
     
-        # Check if the numer of NODES are correct
+        # Check if the number of NODES are correct
         if self.cluster_dict["partition_name"] == avail_partitions[0]:
             if self.cluster_dict["ncpus"] % 128 != 0:
                 exp_nodes = 1 + self.cluster_dict["ncpus"] // 128  
@@ -804,18 +956,19 @@ cd {}
             #check on the convergence of the SCF caclculation with if
             # If converged, Go in the next directory and run the new job
             # Change the restart
-            file.write("""
+            file.write(f"""
 if grep -q "SCF run NOT" output.out || grep -q "ABORT" output.out; then
-                       echo 'WARNING : run not converged or job aborted
-                       Next job cancelled'
+  echo 'WARNING : run not converged or job aborted
+    Next job cancelled'
 else
-                       cp ./{}-1.restart {}
-
-                      cd {}
-                      chmod g+s ./*
-                      {} run.sh
+  cp ./{self.cp2k_dict["_SYSTEM_"]}-1.restart {os.path.join(final_path, self.cp2k_dict["_RES_FILE_"])}
+  cp ./{self.cp2k_dict["_SYSTEM_"]}-RESTART.wfn {os.path.join(final_path, self.cp2k_dict["_RES_WFN_FILE_"])}
+                       
+  cd {final_path}
+  chmod g+s ./*
+  {self.cluster_dict['run_job']} run.sh
 fi
-                       """.format(self.cp2k_dict["_SYSTEM_"], os.path.join(final_path, self.cp2k_dict["_RES_FILE_"]), final_path, self.cluster_dict['run_job']))        
+""")        
         
         file.close()
     
