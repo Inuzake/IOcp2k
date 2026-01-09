@@ -505,7 +505,6 @@ module load cp2k/2024.3\n
             # print(input_text == pre_input_text)
             # print(input_text)
             if input_text == pre_input_text and not(key in ["_full_RES_FILE_"]):
-                print(input_text)
                 raise ValueError("KEY {} NOT FOUND, please check the text of the cp2k calculation".format(key))
 
         
