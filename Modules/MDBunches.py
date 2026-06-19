@@ -260,6 +260,9 @@ module load cp2k/2024.3\n
   @ENDIF
 
   &DFT
+    # UKS T
+    # CHARGE -1
+    # MULTIPLICITY 2
     BASIS_SET_FILE_NAME ${BASIS_POT_PATH}/${BASIS_FILE}
     @IF ${ADMM}
     BASIS_SET_FILE_NAME ${BASIS_POT_PATH}/${BASIS_AUX_FILE}
@@ -278,6 +281,9 @@ module load cp2k/2024.3\n
 
     &QS
       EPS_DEFAULT 1.0E-14    # def=1.0E-10
+      @IF ${ADMM}
+      EPS_PGF_ORB 1.0E-6     # def=sqrt(EPS_DEFAULT) precision of overlap matrix elements
+      @ENDIF
       EXTRAPOLATION _EXTRAPOLATION_    #Extrapolation strategy for the wavefunction, ASPC recommended for MD, PS for SPE
       EXTRAPOLATION_ORDER _EXTRA_ORDER_   #Default is 3
       @IF ${USE_GAPW}
@@ -340,7 +346,7 @@ module load cp2k/2024.3\n
 
     @IF ${ADMM}
     &AUXILIARY_DENSITY_MATRIX_METHOD
-      ADMM_TYPE ADMM2
+      ADMM_TYPE ADMMS
       EXCH_CORRECTION_FUNC PBEX
     &END AUXILIARY_DENSITY_MATRIX_METHOD
     @ENDIF
@@ -513,7 +519,26 @@ module load cp2k/2024.3\n
         file.close()
 
 
-
+    def create_sh_export(self, dirs_to_copy):
+        """
+        CREATE AN SH FILE TO export EVERYTHING TO THE CLUSTER
+        """
+        if os.path.isfile("export.sh"):
+            raise ValueError("The file already exists")
+            
+        new_file = open("export.sh", "w")
+        
+        new_file.write("#!/bin/bash \n")
+        for item in dirs_to_copy:
+           if self.cluster_dict["pwd"] is None:
+               line = "scp -r {} {}:{} \n wait\n".format(item, self.cluster_dict["cluster_name"], self.cluster_dict["cluster_scratch"] )
+           else:
+               line = "sshpass -p {} scp -r {} {}:{} \n wait\n".format(self.cluster_dict["pwd"], item, self.cluster_dict["cluster_name"], self.cluster_dict["cluster_scratch"] )
+           new_file.write(line)
+        
+        new_file.close()
+    
+        return
    
     def create_sh_copy(self, dirs_to_copy):
         """
@@ -912,7 +937,7 @@ fi
 #MSUB -q {}   #rome has 128 prc per node, skylake has 48
 #MSUB -N {:d}
 #MSUB -n {:d}
-#MSUB -m scratch
+#MSUB -m scratch,work
 #MSUB -x
 #MSUB -E '--no-requeue'
 #MSUB -Q {}    #normal or long

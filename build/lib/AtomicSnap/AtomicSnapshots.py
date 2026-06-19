@@ -877,7 +877,7 @@ class AtomicSnapshots:
         CREATE ASE SNAPSHOTS 
         ====================
         
-        Rember that ase use EV, ANGSTROM, EV/ANGSTROM3 ANGSTROM/PICOSECOND
+        Remember that ase use EV, ANGSTROM, EV/ANGSTROM3 ANGSTROM/PICOSECOND
 
         It correctly prints energy forces stresses and position
 
@@ -906,7 +906,7 @@ class AtomicSnapshots:
             # Get the center of mass positions (self.snaphsots, 3)
             R_com = self.get_com_positions()
             
-        # Range in the snapshots ans use ASE units
+        # Range in the snapshots and use ASE units
         # ev and angstrom, ev/angstrom3, angstrom/picosecond
         for isnap in range(self.snapshots):
 
@@ -1051,7 +1051,7 @@ class AtomicSnapshots:
         for attr in self.__dict__:  
             if not(attr in ['unit_cell', 'types', 'calc_type', 'snapshots', 'dt']):
                 # Get the attribute's value
-                value1 =             getattr(self, attr) 
+                value1 = getattr(self, attr) 
                 value2 = getattr(atomic_snapshots, attr)
                 
                 # Use np.copy() for np arrays, copy.deepcopy for others
@@ -1073,11 +1073,11 @@ class AtomicSnapshots:
         
         return snap_merge  
     
-    def plot_energy_force(self, img_name = None):
+    def plot_energy_force(self, average_window=[0,-1], img_name = None):
         """
         PLOT ENERGY FORCE FROM ASE SNAPSHOTS 
         
-        Rember that ase use EV, ANGSTROM
+        Remember that ase use EV, ANGSTROM
         
         To plot the force at each time step 
         
@@ -1090,28 +1090,51 @@ class AtomicSnapshots:
         """
         # matplotlib.use('tkagg')
 
-        energies = self.energies * HA_TO_EV /self.N_atoms
+        energies = self.energies * HA_TO_EV
+        energies_cons = self.cons_quant * HA_TO_EV *1000
+
         forces = np.einsum('iab, iab -> i', self.forces * HA_BOHR_TO_EV_ANGSTROM, self.forces * HA_BOHR_TO_EV_ANGSTROM) /self.N_atoms
         
-        x = np.arange(self.snapshots, dtype = int)
+        #get the variance 
+        E_mean = np.mean(energies[average_window[0]:average_window[1]], keepdims=True)
+        E_cons_mean = np.mean(energies_cons[average_window[0]:average_window[1]], keepdims=True)
+        F_mean = np.mean(forces[average_window[0]:average_window[1]], keepdims=True)
+        E_var = np.var(energies[average_window[0]:average_window[1]], mean=E_mean)
+        E_cons_var = np.var(energies_cons[average_window[0]:average_window[1]], mean=E_cons_mean)
+        F_var = np.var(forces[average_window[0]:average_window[1]], mean=F_mean)
         
+        x = np.arange(self.snapshots, dtype = int)
+        xmin, xmax = np.sort(x[average_window])
+
         # Width and height
-        fig = plt.figure(figsize=(8, 5))
-        gs = gridspec.GridSpec(2, 1, figure=fig)
+        fig = plt.figure(figsize=(10, 5))
+        gs = gridspec.GridSpec(2, 2, figure=fig)
         ax = fig.add_subplot(gs[0,0])
-        ax.plot(x, energies, 's', color = 'k')
-        ax.set_ylabel('Energy [eV/atom]', size = 12)
+        ax.plot(x, energies, 's', color = 'k', lw=3, label='Mean,Var(Epot) = {:.3f}, {:.3f} eV from {:.2f} to {:.2f} ps'.format(E_mean[0],E_var,xmin*1e-3*self.dt,xmax*1e-3*self.dt))
+        ax.fill_between(x, energies, np.min(energies), where=(x >= xmin) & (x <= xmax), color='k', alpha=0.3)
+        ax.set_ylabel('Energy [eV]', size = 12)
         ax.tick_params(axis = 'both', labelsize = 12)
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-        
-        ax = fig.add_subplot(gs[1,0])
-        ax.plot(x, forces, 'd', color = 'red')
+        plt.legend(fontsize=18)
+
+        ax = fig.add_subplot(gs[0,1])
+        ax.plot(x, energies_cons,  color = 'darkblue', lw = 3, label='Mean,Var(Econs) = {:.3f}, {:.3f} meV from {:.2f} to {:.2f} ps'.format(E_cons_mean[0],E_cons_var, xmin*1e-3*self.dt,xmax*1e-3*self.dt))
+        ax.fill_between(x, energies_cons, np.min(energies_cons), where=(x >= xmin) & (x <= xmax), color='darkblue', alpha=0.3)
+        ax.set_xlabel('Steps', size = 15)
+        ax.set_ylabel('Cons qunt [meV]', size = 12)
+        ax.tick_params(axis = 'both', labelsize = 12)
+        # ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=4))
+        plt.legend(fontsize=18)
+
+        ax = fig.add_subplot(gs[1,:])
+        ax.plot(x, forces, 'd', color = 'red', label='Mean,Var(F) = {:.3f}, {:.3f} eV/Ang/atom from {:.2f} to {:.2f} ps'.format(F_mean[0],F_var, xmin*1e-3*self.dt,xmax*1e-3*self.dt))
         ax.set_xlabel('Steps', size = 15)
         ax.set_ylabel('Force [eV/Ang/atom]', size = 12)
         ax.tick_params(axis = 'both', labelsize = 12)
         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        plt.legend(fontsize=18)
 
-        
         plt.tight_layout()
 
         if not(img_name is None):
@@ -1142,7 +1165,7 @@ class AtomicSnapshots:
         fig = plt.figure(figsize=(7, 4))
         gs = gridspec.GridSpec(1,1, figure=fig)
 
-        # In femptosceond
+        # In femtosceond
         x = np.arange(self.snapshots) * self.dt
 
         # Get the average and the standard error
@@ -1308,7 +1331,6 @@ class AtomicSnapshots:
         if self.densities is None:
             # Get the total molar mass in UMA 
             total_mass = np.sum(self.get_masses_from_types())
-    
             # Get the volumes in ANGSTROM^3
             volumes = np.zeros(self.snapshots, dtype = float)
             for i in range(self.snapshots):
@@ -1355,7 +1377,7 @@ class AtomicSnapshots:
         PLOT ENERGY FORCE KINETIC ENERGY TEMERATURE FROM ASE SNAPSHOTS FOR NVT SIMULATION
         ==================================================================================
         
-        Rember that ase use EV, ANGSTROM
+        Remember that ase use EV, ANGSTROM
         
         To plot the force at each time step 
         
@@ -1436,7 +1458,7 @@ class AtomicSnapshots:
 
     def plot_md_npt(self, img_name = None, show = True):
         """
-        PLOT ENERGY FORCE FROM ASE SNAPSHOTS FOR NVT SIMULATION
+        PLOT ENERGY FORCE FROM ASE SNAPSHOTS FOR NPT SIMULATION
         
         Rember that ase use EV, ANGSTROM
         
@@ -1530,17 +1552,21 @@ class AtomicSnapshots:
         
         return
 
-    def get_masses_from_types(self):
+    def get_masses_from_types(self, selected_atoms=None):
         """
         GET THE MASSES FOR ALL THE ATOMS IN THE SNAPSHOTS
         =================================================
-
+        If you want specific atoms masses, add a list of those as selected_atoms
         Use units of ASE so UMA
         """
         # Get the masses
         masses_array = np.zeros(self.N_atoms)
         for i, at_type in enumerate(self.types):
-            masses_array[i] = ase.data.atomic_masses[ase.data.atomic_numbers[at_type]]
+            if selected_atoms is not None:
+                if at_type in selected_atoms:
+                    masses_array[i] = ase.data.atomic_masses[ase.data.atomic_numbers[at_type]]
+            else:
+                masses_array[i] = ase.data.atomic_masses[ase.data.atomic_numbers[at_type]]
 
         return masses_array
         
@@ -1643,7 +1669,7 @@ class AtomicSnapshots:
     def get_pair_correlation_functions(self, selected_atoms, custom_ase_atoms = None,
                                        t_range = None, my_r_range = (0.01, 6.0), bins = 500,
                                        ase_atoms_file = "atoms_gr.xyz", save_ase_atoms_file = False, wrap_positions = True, use_pbc = True,
-                                       json_file_result = "pair_corr_function.json" , show_results = True, save_plot = False):
+                                       json_file_result = "pair_corr_function.json" , show_results = True, save_plot = False, compute_CN = False):
         """
         GET THE PAIR CORRELATION FUNCTION
         =================================
@@ -1712,18 +1738,10 @@ class AtomicSnapshots:
             index_ini = int(t_range[0] * 1e+3/self.dt)
             index_fin = int(t_range[1] * 1e+3/self.dt)
 
-        # Temporary wrtie the ase atoms objects
-        ase.io.write(ase_atoms_file, ase_atoms[index_ini:index_fin], format = "xyz")
         print("xxx", len(ase_atoms[index_ini:index_fin]))
         # Get the correct indices (usefule to set the corret shape of the box in MDanalysis)
         my_indices = np.arange(index_ini, index_fin, dtype = int)
-
         
-        # A dictionary with atom types and the corresponding diffusion constant and error
-        g_results = {}
-        # Read the xyz file
-        MD_atoms = MDAnalysis.Universe(ase_atoms_file)
-
         # Prepare a plot
         if show_results:
             # Width and height
@@ -1732,7 +1750,29 @@ class AtomicSnapshots:
                 gs = gridspec.GridSpec(1, 1, figure = fig)
             else:
                 gs = gridspec.GridSpec(len(selected_atoms)//2, 2, figure = fig)
+        
+        # A dictionary with atom types and the corresponding diffusion constant and error
+        g_results = {}
+        cdf_results = {}
+        # Creation of Universe objects for analysis
+        # Retrieve topology inofrmations
+        n_atoms = len(ase_atoms[0])
+        symbols = ase_atoms[0].get_chemical_symbols()
+        masses = ase_atoms[0].get_masses()
+        
+        # Create an empty Universe
+        MD_atoms = MDAnalysis.Universe.empty(n_atoms,trajectory=True)
 
+        # Add topology
+        MD_atoms.add_TopologyAttr("names", symbols)
+        MD_atoms.add_TopologyAttr("types", symbols)
+        MD_atoms.add_TopologyAttr("masses", masses)
+        
+        # Add trajectory
+        coords = np.array([traj.positions for traj in ase_atoms[index_ini:index_fin]])
+        # cell = list(ase_atoms[0].cell.lengths()) + list(ase_atoms[0].cell.angles())
+        MD_atoms.load_new(coords, order="fac")
+        
         print("Setting the cell dimension and the time step (this might take a while)...")
         for snapshot, MD_atoms_snapshot in enumerate(MD_atoms.trajectory):
             # Manually set the unit cell dimensions in ANGSTROM
@@ -1753,21 +1793,33 @@ class AtomicSnapshots:
             # MD_atoms_selected2.wrap()
 
             # Compute RDF
-            rdf_calc = MDAnalysis.analysis.rdf.InterRDF(MD_atoms_selected1, MD_atoms_selected2,
+            rdf_calc = MDAnalysis.analysis.rdf.InterRDF_s(MD_atoms, [[MD_atoms_selected1, MD_atoms_selected2]],
                                                         range = my_r_range, nbins = bins, norm = 'rdf')
             rdf_calc.run(verbose = True)
 
-            r, gr = rdf_calc.results.bins, rdf_calc.results.rdf
+            r, gr = rdf_calc.results.bins, np.sum(rdf_calc.results.rdf[0][0], axis=0)/len(MD_atoms_selected2)
+            i_peak=np.argmax(gr)
+            i_min = i_peak + np.argmin(gr[i_peak:])
+
             # Save the results
             g_results.update({"{}{}".format(atomic_pair[0], atomic_pair[1]) : [list(r), list(gr)]})
             
+            if compute_CN:
+                # Compute the cumulative distribution function
+                cdf = rdf_calc.get_cdf()
+                cn = np.sum(cdf[0][0],axis=0)
+                cdf_results.update({"{}{}".format(atomic_pair[0], atomic_pair[1]) : [list(r), list(cn)]})
+
+            print(f"r max is: {r[i_peak]}")
             if show_results:
                 ax = fig.add_subplot(gs[index // 2, index %2])
-                ax.plot(r, gr, lw = 3, color = "purple", label = "g(r) for {} {}".format(atomic_pair[0], atomic_pair[1]))
+                ax.plot(r, gr, lw = 3, color = "darkviolet", label = "g(r) for {} {} \nFirst pic at {:.2f} Angstrom".format(atomic_pair[0], atomic_pair[1], r[i_peak]))
+                if compute_CN:
+                    ax.plot(r, cn, lw = 3, color = "mediumpurple", label = f"cdf(r) for {atomic_pair[0]} {atomic_pair[1]} \nCN of {cn[i_min]:.2f}")
                 if gr.max() > 10 * gr[-1]:
                     ax.set_ylim(0, 2 * gr[-1])
                 ax.set_xlabel('r [Angstrom]', size = 15)
-                ax.set_ylabel('g(r)', size = 12)
+                ax.set_ylabel(f'g(r) {atomic_pair[0]}-{atomic_pair[1]}', size = 12)
                 ax.tick_params(axis = 'both', labelsize = 12)
                 plt.legend(fontsize = 15)
                 
@@ -1785,7 +1837,52 @@ class AtomicSnapshots:
         return g_results
 
 
+
+    def get_coordination_number(self,rdf_json_file= "pair_corr_function.json",selected_atoms=None):
+        # TO DO
+        """
+        GET THE COORDINATION NUMBER
+        ============================
+        Computing the average Coordination Number (CN) in a fluid from radial distribution pair function.
+        It is defined as the average number of first neighbors around a given molecule over a spherical shell.
+
+        CN_ij = 4*pi*rho_j*integral[g_ij(r)*r**2*dr](r2-r1) with r1 =0 and r2=first minimum of g(r)
+
+        Parameters :
+        ------------
+            - rdf_json_file: file from where RDF is read
+            - selected_atoms: Selected atoms for the CN calculation
+        """
+        # Read the json files
+        with open(rdf_json_file) as f:
+            rdf = json.load(f)
+        # Retrieve the gr and rho data
+        for key,value in rdf.items():
+            atoms = key
+            r = value[0]
+            gr = value[1]
+        r = np.array(r)
+        gr = np.array(gr)
         
+        # calculation of density rho_j in A-3
+        total_number = len([i for i in self.types if i in selected_atoms])
+        volume = np.linalg.det(self.unit_cell)
+        rho_j = total_number/volume
+        print(f"density is {rho_j}")
+        # Find cutoff rc = first neighbor
+        i_peak=np.argmax(gr)
+        i_min = i_peak + np.argmin(gr[i_peak:])                                                      
+        r_c = r[i_min]
+        dr = r[1] - r[0]
+        
+        CN = 4 * np.pi * rho_j * np.sum(gr[r <= r_c] * r[r<= r_c]**2 *dr)
+
+        print(f"Coordination number between {atoms} is : {CN}")
+        rdf["CN"] = CN
+        with open(rdf_json_file, "w") as f:
+            json.dump(rdf, f, indent=4)
+        
+        save_dict_to_json(rdf_json_file,rdf)
 
 
     def get_diffusion_constant(self, t_range = None, time_windows = None, custom_ase_atoms = None, subtract_com = True, selected_atoms = None,
@@ -1801,7 +1898,7 @@ class AtomicSnapshots:
 
         Parameters:
         -----------
-            -t_range: list of float, the time window  in PIDCOSECOND. In this window compute the averages.
+            -t_range: list of float, the time window  in PICOSECOND. In this window compute the averages.
 
             -time_windows: list of float, the time window in PICOSECOND for the fit of the MSD
 
@@ -2058,8 +2155,48 @@ class AtomicSnapshots:
         
 
         
+    def get_dielectric_constant(self, time_window = None, Nmax = 5, tol_refold = 10, debug_refold = False):
+        """
+        GET THE DIELECTRIC CONSTANT FROM DIPOLE FLUCTUATIONS
+        ==========================================================
 
-    
+        Parameters:
+        -----------
+            -time_window: list, the initial and final time for sampling in PICOSECONDS
+
+            -Nmax: int, the max integer to add/subtract to the dipoles to refold them
+            -tol_refold: float, the tolerance to consider the dipoles snapshots continuous
+            -debug_refold: bool, if True we print the refolding details
+        """
+        # For the time we use PICOSECONDS
+        if time_window is None:
+            index1 = 0
+            index2 = self.snapshots + 1
+            t_min = 0
+            t_max = self.snapshots * self.dt * 1e-3
+        else:
+            t_min, t_max = np.sort(np.asarray(time_window))
+            # Convert in fs only to get the indices
+            index1 = int(t_min * 1e+3/self.dt)
+            index2 = int(t_max * 1e+3/self.dt)
+
+        print("\n\n================= VIBRATIONAL ANALYSIS from {:.2f} to {:.2f} ps =================".format(t_min, t_max))
+        
+        # First we refold the dipoles
+        self.refold_all_dipoles(Nmax = Nmax, tol = tol_refold, debug = debug_refold)
+
+        # Set up the class
+        vibrations = Vibrational.Vibrational()
+        
+        # Give the dipoles and the time step
+        vibrations.init(self.dipoles[index1:index2], self.dt)
+        volume = np.linalg.det(self.unit_cell)
+        temperature = np.average(self.temperatures)
+        mean_sqrtd = np.mean(vibrations.d.flatten()**2)
+        sqrt_meand = np.mean(vibrations.d.flatten())**2
+        epsilon = 1 + (4* np.pi * (mean_sqrtd - sqrt_meand))/3*volume*temperature
+        print(f"<D**2> = {mean_sqrtd}\n <D>**2 = {sqrt_meand}\n epsilon = {epsilon}")
+
 
     def get_ir_spectra(self, time_window = None,
                        Nmax = 5, tol_refold = 1.0, debug_refold = False,
