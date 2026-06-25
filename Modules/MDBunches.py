@@ -13,6 +13,8 @@ import subprocess
 
 from datetime import datetime
 
+import fileinput
+
 
 class AtomicBunches:
     """
@@ -638,7 +640,7 @@ module load cp2k/2024.3\n
 
         # Add the +1 to have exactly n_batches directories
         for batch in range(self.n_batches_min, (self.n_batches + self.n_batches_min) ):
-            
+
             # The execution directory
             if self.cp2k_dict["_RTYPE_"] == "MD":
               execution_dir =  "BATCH_{:d}_MD_T_{:d}_steps_{:d}_dt_{:.1f}_".format(batch, self.cp2k_dict["_TEMPERATURE_"],
@@ -702,6 +704,13 @@ module load cp2k/2024.3\n
             subprocess.run(["cp", self.structure_file, os.path.join("./", self.cp2k_dict["_COORD_FILE_NAME_"])], check = True)
             if self.cp2k_dict["_CALCTYPE_"] == "REFTRAJ":
                 ase.io.write(os.path.join("./", "traj.xyz"), [traj_file[i] for i in blocks_traj[batch-1].tolist()], format="xyz")
+                n=0
+                for line in fileinput.input(os.path.join("./", "traj.xyz"), inplace=True):
+                    if line.strip() == "":
+                        print(f"i={n}")
+                        n +=1
+                    else:
+                        print(line, end="")
             # Copy the restart file of a previous batch if this is the first batch to submit
             if batch == self.n_batches_min:
                 if self.restart:
