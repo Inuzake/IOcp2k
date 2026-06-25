@@ -42,6 +42,8 @@ class AtomicBunches:
 
         # The structure file to initialize everything use .xyz data in angstrom units
         self.structure_file = None
+        # The reftraj file to recompute trajectories. taking from .traj data
+        self.reftraj_file = None
 
         # int 0=False 1=True
         self.restart = False
@@ -142,7 +144,8 @@ module load cp2k/2024.3\n
                           # POLARIZATION
                           "_USE_BERRY_" : 0,
                           # COMPUTE HOMO LUMO GAPS EVERY STEPS
-                          "_N_HL_GAL_PRINT_" : 200}
+                          "_N_HL_GAL_PRINT_" : 200,
+                          }
 
         # tHIS IS SET TO TRUE AFTER CALLING initialize
         self.initialized = False
@@ -226,7 +229,7 @@ module load cp2k/2024.3\n
 
     def create_inp_cp2k(self, dictionary):
         """
-        CREATE THE INPUT FOR NPT SIMULATIONS in CP2K
+        CREATE THE INPUT FOR NPT, NVT, SPE SIMULATIONS in CP2K
         """
 
         input_text = """
@@ -256,13 +259,13 @@ module load cp2k/2024.3\n
   METHOD QuickStep
 
   @IF ( ${RTYPE} /= ENERGY_FORCE)
-#   STRESS_TENSOR ANALYTICAL
+  STRESS_TENSOR ANALYTICAL
   @ENDIF
 
   &DFT
-    UKS T
-    CHARGE -1
-    MULTIPLICITY 2
+    # UKS T
+    # CHARGE -1
+    # MULTIPLICITY 2
     BASIS_SET_FILE_NAME ${BASIS_POT_PATH}/${BASIS_FILE}
     @IF ${ADMM}
     BASIS_SET_FILE_NAME ${BASIS_POT_PATH}/${BASIS_AUX_FILE}
@@ -419,6 +422,16 @@ module load cp2k/2024.3\n
 &MOTION
   &MD
     ENSEMBLE      _CALCTYPE_
+    @IF ( _CALCTYPE_ = REFTRAJ )
+    &REFTRAJ
+       TRAJ_FILE_NAME traj.xyz
+       FIRST_SNAPSHOT 1 
+       LAST_SNAPSHOT _STEPS_ 
+       STRIDE 1 
+       EVAL ENERGY_FORCES
+    &END REFTRAJ
+    @ENDIF
+    @IF ( _CALCTYPE_ /= REFTRAJ)
     STEPS             _STEPS_
     TIMESTEP [fs]     _TIMESTEP_
     TEMPERATURE [K]   _TEMPERATURE_
@@ -432,6 +445,7 @@ module load cp2k/2024.3\n
 	   PRESSURE [bar]  _PRESSURE_
      TIMECON  [fs]   _TIMECONCONPRESS_
     &END BAROSTAT
+    @ENDIF
   &END MD
 
   &PRINT
@@ -615,10 +629,16 @@ module load cp2k/2024.3\n
 
         # A list with all the execution dir containing a run.sh file
         execution_dir_list = []
+        # Initialize the trajectroy file for reftraj simulation
+        if self.reftraj_file is not None:
+            print("PREPARING THE TRAJ FILES FOR REFTRAJ SIMULATION\n")
+            traj_file = ase.io.read(self.reftraj_file,index=":")
+            id_traj = np.sort(np.random.choice(len(traj_file)+1, size = self.cp2k_dict["_STEPS_"]*self.n_batches, replace=False))
+            blocks_traj = [id_traj[i:i+self.cp2k_dict["_STEPS_"]].copy() for i in range(0,len(id_traj), self.cp2k_dict["_STEPS_"])]
 
         # Add the +1 to have exactly n_batches directories
         for batch in range(self.n_batches_min, (self.n_batches + self.n_batches_min) ):
-        
+            
             # The execution directory
             if self.cp2k_dict["_RTYPE_"] == "MD":
               execution_dir =  "BATCH_{:d}_MD_T_{:d}_steps_{:d}_dt_{:.1f}_".format(batch, self.cp2k_dict["_TEMPERATURE_"],
@@ -629,6 +649,9 @@ module load cp2k/2024.3\n
                                                                                               self.cp2k_dict["_PRESSURE_"],
                                                                                               self.cp2k_dict["_STEPS_"],
                                                                                               self.cp2k_dict["_TIMESTEP_"])
+              elif self.cp2k_dict["_CALCTYPE_"] == "REFTRAJ":
+                   execution_dir = "BATCH_{:d}_REFTRAJ_steps_{:d}_".format(batch, self.cp2k_dict["_STEPS_"])
+                
             elif self.cp2k_dict["_RTYPE_"] == "ENERGY_FORCE":
                 execution_dir = f"BATCH_{batch:d}_SPE_conf_{self.cp2k_dict['_STEPS_']:d}_"
             else:
@@ -656,7 +679,11 @@ module load cp2k/2024.3\n
                     raise ValueError("The scratch dir is not correct according to you! The creation of the batches has been killed!")
                 self.cp2k_dict["_REST_"]       = int(np.copy(self.restart))
                 self.cp2k_dict["_full_RES_FILE_"] = copy.deepcopy(self.restart_file)
- 
+                if self.reftraj_file != None:
+                    print(f"RECOMPUTE from\n{self.reftraj_file}")
+                    SURE_reftraj = input("Are you sure ? YES or NO")
+                    if SURE_reftraj == "NO":
+                        raise ValueError("The RECOMPUTE traj is no correct according to you! The creation of the batches has been killed!")
             # If it is not the first batch we should force the restart from the previous batch
             else:
                 # Update this variable of cp2k dictionary
@@ -673,7 +700,8 @@ module load cp2k/2024.3\n
         
             # Copy the structure file previously built .xyz (obtained from a structural relaxation)
             subprocess.run(["cp", self.structure_file, os.path.join("./", self.cp2k_dict["_COORD_FILE_NAME_"])], check = True)
-
+            if self.cp2k_dict["_CALCTYPE_"] == "REFTRAJ":
+                ase.io.write(os.path.join("./", "traj.xyz"), [traj_file[i] for i in blocks_traj[batch-1].tolist()], format="xyz")
             # Copy the restart file of a previous batch if this is the first batch to submit
             if batch == self.n_batches_min:
                 if self.restart:
@@ -686,8 +714,10 @@ module load cp2k/2024.3\n
                 self.create_inp_cp2k(self.cp2k_dict)
             elif self.cp2k_dict["_CALCTYPE_"] == "NPT_I":
                 self.create_inp_cp2k(self.cp2k_dict)
+            elif self.cp2k_dict["_CALCTYPE_"] == "REFTRAJ":
+                self.create_inp_cp2k(self.cp2k_dict)
             else:
-                raise NotImplementedError("NPT_I and NVT are the only implemented")
+                raise NotImplementedError("NPT_I, NVT and REFTRAJ are the only implemented")
         
 
             # Save the dictionary with all the input data
