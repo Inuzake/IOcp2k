@@ -72,6 +72,8 @@ class AtomicBunches:
                               'nnodes' : 1,
                              # The number of cpus
                               'ncpus' : 1, 
+                             # The number of cores per parallel task
+                              'ncores' : 1,
                               # No requeue
                               'no_requeue' : True,
                               # The qos
@@ -214,7 +216,7 @@ module load cp2k/2024.3\n
         if "PARAMETRIZATION" in self.cp2k_dict["_CP2K_XC_FUNCTIONAL_"].split():
             index = self.cp2k_dict["_CP2K_XC_FUNCTIONAL_"].split().index("PARAMETRIZATION")
             dft_functional_used = self.cp2k_dict["_CP2K_XC_FUNCTIONAL_"].split()[index + 1]
-        if "SCALE_C" in self.cp2k_dict["_CP2K_XC_FUNCTIONAL_"].split():
+        if self.cp2k_dict["_ADMM_"] == 1:
             dft_functional_used = "PBE0"
         if self.cp2k_dict["_VDW3_FUNCTIONAL_"] != dft_functional_used:
             raise ValueError("The DFT xc is {} whereas the D3 parametrization is {}".format(dft_functional_used, self.cp2k_dict["_VDW3_FUNCTIONAL_"]))
@@ -367,7 +369,7 @@ module load cp2k/2024.3\n
               @ENDIF
             &END EACH
             NHOMO        2
-            NLUMO       10
+            NLUMO        2
             WRITE_CUBE   FALSE
         &END MO_CUBES
 
@@ -386,6 +388,21 @@ module load cp2k/2024.3\n
               @ENDIF
             &END EACH
         &END MOMENTS
+
+        &MULLIKEN SILENT
+            FILENAME =${SYSTEM}-Mulliken_charges.dat
+            &EACH
+                MD 50
+            &END EACH
+        &END MULLIKEN
+        @ENDIF
+
+        &HIRSHFELD
+            FILENAME =${SYSTEM}-Hirshfeld_charges.dat
+            &EACH
+                MD 50
+            &END EACH
+        &END HIRSHFELD
         @ENDIF
         
     &END PRINT
@@ -628,6 +645,9 @@ module load cp2k/2024.3\n
         elif custom_cluster_function == "PARACELSUS":
             print("\nRUNNING ON PARACELSUS\n")
             custom_cluster_function = self.create_run_file_paracelsus
+        elif custom_cluster_function == "JEAN-ZAY":
+            print("\nRUNNING ON JEAN-ZAY\n")
+            custom_cluster_function = self.create_run_file_jean_zay
 
         # A list with all the execution dir containing a run.sh file
         execution_dir_list = []
@@ -703,7 +723,7 @@ module load cp2k/2024.3\n
             # Copy the structure file previously built .xyz (obtained from a structural relaxation)
             subprocess.run(["cp", self.structure_file, os.path.join("./", self.cp2k_dict["_COORD_FILE_NAME_"])], check = True)
             if self.cp2k_dict["_CALCTYPE_"] == "REFTRAJ":
-                ase.io.write(os.path.join("./", "traj.xyz"), [traj_file[i] for i in blocks_traj[batch-1].tolist()], format="xyz")
+                ase.io.write(os.path.join("./", "traj.xyz"), [traj_file[i] for i in blocks_traj[batch-1-self.n_batches_min].tolist()], format="xyz")
                 n=0
                 for line in fileinput.input(os.path.join("./", "traj.xyz"), inplace=True):
                     if line.strip() == "":
@@ -929,6 +949,115 @@ fi
         file.close()
     
 
+    def create_run_file_jean_zay(self, batch_index, execution_dir):
+        """
+        CREATES THE RUN.SH FILE FOR JEAN-ZAY
+        =================================
+
+        Parameters:
+        -----------
+            -batch_index: int used as label for the job name and for submitting the next batch calculation, -1 if it is the last batch to submit
+            -execution_dir: the dir containing the run.sh file and all the inputs needed by cp2k
+        """
+
+        avail_partitions = ["cpu_p1", "prepost","visu"]
+        # Chek if the partition is ok
+        if not (self.cluster_dict["partition_name"] in avail_partitions):
+            raise ValueError("Partition name not valid")
+    
+        myQOS = "normal"
+        myQOS = self.cluster_dict["qos"]
+        #TODO
+        # if self.cluster_dict["time"] > 60 * 60 * 20:
+        #     myQOS = "qos_cpu-t4"
+        #TODO
+        # Check if the number of NODES are correct
+        # if self.cluster_dict["partition_name"] == avail_partitions[0]:
+        #     if (self.cluster_dict["ncpus"] * self.cluster_dict["ncores"]) % 40 != 0:
+        #         exp_nodes = 1 + (self.cluster_dict["ncpus"] * self.cluster_dict["ncores"]) // 40  
+        #     else:
+        #         exp_nodes = (self.cluster_dict["ncpus"] * self.cluster_dict["ncores"]) // 40
+        # else:
+        #     if (self.cluster_dict["ncpus"] * self.cluster_dict["ncores"]) % 48 != 0:
+        #         exp_nodes =  1 + (self.cluster_dict["ncpus"] * self.cluster_dict["ncores"]) // 48
+        #     else:
+        #         exp_nodes = (self.cluster_dict["ncpus"] * self.cluster_dict["ncores"]) // 48
+            
+        
+        # if exp_nodes != self.cluster_dict["nnodes"]:
+        #     print("JEAN-ZAY| The expected number of nodes is {} but you choose {} for ncpus {}".format(exp_nodes,  self.cluster_dict["nnodes"],  self.cluster_dict["ncpus"]))
+        #     raise ValueError("JEAN-ZAY| The number of nodes is not correct, the job will crash")
+    
+        
+        file = open("run.sh", "w")
+        
+        file.write(f"""#!/bin/bash
+# Project/Account
+#SBATCH --account={self.cluster_dict["account"]}@cpu
+# QoS/Partition/SubPartition
+#-SBATCH -C cpu_p1
+#SBATCH --qos={myQOS}
+# Number of Nodes/MPIperNodes/OpenMPperMPI/GPU
+#SBATCH --nodes {self.cluster_dict["nnodes"]}
+#SBATCH --ntasks-per-node {self.cluster_dict["ncpus"]}
+#SBATCH --cpus-per-task {self.cluster_dict["ncores"]}
+#SBATCH --hint=nomultithread
+# Walltime
+#SBATCH -t {self.cluster_dict["time"]}
+# Merge Output/Error
+#SBATCH -o {self.cluster_dict["job_name"]}.%j
+#SBATCH -e {self.cluster_dict["job_name"]}.%j
+# Name of job
+#SBATCH -J {self.cluster_dict["job_name"]}_{batch_index:d}
+set -x
+        
+{self.cluster_dict["module_load"]}
+        
+""")
+        
+        # TODO ADD the possibility of not using minus x and no requeue
+        if not self.cluster_dict["minus_x"]:
+            raise ValueError("IRENE| The minus x option should be true")
+
+        if not self.cluster_dict["no_requeue"]:
+            raise ValueError("IRENE| The no requeue option should be true")
+        
+        allfiles = os.listdir("./")
+        for myfile in allfiles:
+            if myfile.endswith(".inp"):
+                print("JEAN-ZAY| You are running {} \n".format(myfile))
+                file.write("""
+cd {}
+{} {} -i {} -o output.out
+    
+""".format(os.path.join(self.cluster_dict["cluster_scratch"], execution_dir),
+               self.cluster_dict["mpirun"],  self.cluster_dict["exe"], myfile))
+
+        if batch_index > 0:
+            final_dir  = execution_dir.replace("BATCH_{}".format(batch_index), "BATCH_{}".format(batch_index + 1))
+            final_path = os.path.join(self.cluster_dict["cluster_scratch"], final_dir)
+            #check on the convergence of the SCF caclculation with if
+            # If converged, Go in the next directory and run the new job
+            # Change the restart
+            file.write(f"""
+if grep -q "SCF run NOT" output.out || grep -q "ABORT" output.out; then
+  echo 'WARNING : run not converged or job aborted
+    Next job cancelled'
+else
+  cp ./{self.cp2k_dict["_SYSTEM_"]}-1.restart {os.path.join(final_path, self.cp2k_dict["_RES_FILE_"])}
+  cp ./{self.cp2k_dict["_SYSTEM_"]}-RESTART.wfn {os.path.join(final_path, self.cp2k_dict["_RES_WFN_FILE_"])}
+                       
+  cd {final_path}
+  chmod g+s ./*
+  {self.cluster_dict['run_job']} run.sh
+fi
+""")        
+        
+        file.close()
+    
+
+
+
     def create_run_file_irene(self, batch_index, execution_dir):
         """
         CREATES THE RUN.SH FILE FOR IRENE
@@ -945,26 +1074,26 @@ fi
         if not (self.cluster_dict["partition_name"] in avail_partitions):
             raise ValueError("Partition name not valid")
     
-        myQOS = "normal"
+        myQOS = "qos_cpu-t3"
         myQOS = self.cluster_dict["qos"]
         if self.cluster_dict["time"] > 60 * 60 * 24:
             myQOS = "long"
     
         # Check if the number of NODES are correct
         if self.cluster_dict["partition_name"] == avail_partitions[0]:
-            if self.cluster_dict["ncpus"] % 128 != 0:
-                exp_nodes = 1 + self.cluster_dict["ncpus"] // 128  
+            if (self.cluster_dict["ncpus"] * self.cluster_dict["ncores"]) % 128 != 0:
+                exp_nodes = 1 + (self.cluster_dict["ncpus"] * self.cluster_dict["ncores"]) // 128  
             else:
-                exp_nodes = self.cluster_dict["ncpus"] // 128
+                exp_nodes = (self.cluster_dict["ncpus"] * self.cluster_dict["ncores"]) // 128
         else:
-            if self.cluster_dict["ncpus"] % 48 != 0:
-                exp_nodes =  1 + self.cluster_dict["ncpus"] // 48
+            if (self.cluster_dict["ncpus"] * self.cluster_dict["ncores"]) % 48 != 0:
+                exp_nodes =  1 + (self.cluster_dict["ncpus"] * self.cluster_dict["ncores"]) // 48
             else:
-                exp_nodes = self.cluster_dict["ncpus"] // 48
+                exp_nodes = (self.cluster_dict["ncpus"] * self.cluster_dict["ncores"]) // 48
             
         
         if exp_nodes != self.cluster_dict["nnodes"]:
-            print("IRENE| The expected number of nodes is {} but you choose {} for ncpus {}", exp_nodes,  self.cluster_dict["nnodes"],  self.cluster_dict["ncpus"])
+            print("IRENE| The expected number of nodes is {} but you choose {} for ncpus {}".format(exp_nodes,  self.cluster_dict["nnodes"],  self.cluster_dict["ncpus"]))
             raise ValueError("IRENE| The number of nodes is not correct, the job will crash")
     
         
@@ -976,6 +1105,7 @@ fi
 #MSUB -q {}   #rome has 128 prc per node, skylake has 48
 #MSUB -N {:d}
 #MSUB -n {:d}
+#MSUB -c {:d}
 #MSUB -m scratch,work
 #MSUB -x
 #MSUB -E '--no-requeue'
@@ -990,6 +1120,7 @@ set -x
                    self.cluster_dict["partition_name"],
                    self.cluster_dict["nnodes"],
                    self.cluster_dict["ncpus"], 
+                   self.cluster_dict["ncores"],
                    myQOS,
                    self.cluster_dict["time"],
                    self.cluster_dict["account"],
@@ -1035,7 +1166,6 @@ fi
         
         file.close()
     
-
 
 
 def save_dict_to_json(json_file_name, my_dict):
