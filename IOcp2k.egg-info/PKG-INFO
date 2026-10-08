@@ -12,6 +12,7 @@ Requires-Python: >=3.6
 Requires-Dist: numpy
 Requires-Dist: scipy
 Requires-Dist: ase
+Requires-Dist: MDAnalysis
 Dynamic: author
 Dynamic: author-email
 Dynamic: classifier

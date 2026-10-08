@@ -1,18 +1,20 @@
-#import setuptools
-from __future__ import print_function
-import numpy
-# from numpy.distutils.core import setup, Extension
 from setuptools import setup, find_packages
 
-setup(name = "iocp2k",
-      version = "0.1",
-      description = "Read the cp2k snapshots",
-      author = "Antonio Siciliano",
+setup(name="IOcp2k",
+      version="0.1.0",
+      author="Antonio Sicilinao",
+      author_email="antonio.siciliano@ens.psl.eu",
+      description="IO for cp2k MD",
       packages = ["AtomicSnap"],
       package_dir = {"AtomicSnap": "Modules"},
-      license = "GPLv3")
-
-
-def readme():
-    with open("README.md") as f:
-        return f.read()
+      #long_description=open("README.md").read(),
+      #ilong_description_content_type="text/markdown",
+      url="https://github.com/AntonioSiciliano/IOcp2k.git",
+      # packages=find_packages(),
+      classifiers=[
+         "Programming Language :: Python :: 3",
+         "License :: OSI Approved :: MIT License",
+         "Operating System :: OS Independent",
+      ],
+      python_requires = '>=3.6',
+      install_requires = ["numpy", "scipy", "ase", "MDAnalysis"])

@@ -4,7 +4,7 @@ import ase
 from ase import Atoms
 
 import os, sys
-
+from pathlib import Path
 import copy
 
 import json
@@ -52,7 +52,10 @@ class AtomicBunches:
         self.restart_file = None
         
         self.local_path = None
-        
+
+        # The type of run to be implemented. It can be MD, ENERGY_FORCE or ENERGY
+        self.RTYPE_AVAILABLE = ["MD", "ENERGY_FORCE", "ENERGY"]
+
         ###########
         # CLUSTER #
         ###########
@@ -151,7 +154,54 @@ module load cp2k/2024.3\n
                           "_N_HL_GAL_PRINT_" : 200,
                           }
 
-        # tHIS IS SET TO TRUE AFTER CALLING initialize
+        self.cp2k_elec_dict = {# TYPE OF RUN
+                          "_RTYPE_" : "ENERGY", 
+                          # SYSTEM NAME IN CP2k
+                          "_SYSTEM_" : "brines",
+                          # IF YOU WANT TO RESTART THE CALCULATION SET RESTART TO 1
+                          "_REST_" : 0, "_RES_WFN_FILE_" : "initial.wfn",
+                          # THE FULL RESTART FILE PATH TO KEEP TRACK OF WHAT WE DO
+                          "_full_RES_FILE_" : None,
+                          # Where to find the basis set and basis and pseudo file
+                          "_BASIS_POT_PATH_" :  "/ccc/work/cont003/gen2309/sicilana/DATA_CP2K", "_BASIS_FILE_" : "GTH_BASIS_SETS",
+                          "_POT_FILE_" : "GTH_POTENTIALS",
+                          # VDW INTERACTION, VDW FUNCTIONAL and WHICH ATOM TO EXCLUDE FROM VDW
+                          "_VDW_" : 1, "_VDW3_FUNCTIONAL_" : None, "_VdW_EXCLU_" : 0, "_VDW3_EXCLUDE_ATOM_" : 3,
+                          "_RCvdw_" : 12, 
+                          # IF YOU WANT TO GENERATE MOLECULES FOR WANNIER OR MOLECULAR STATE CALC
+                          "_GEN_" : 0,
+                          # THE SMOOTHING OF THE DENSITY
+                          "_XC_SMOOTH_RHO_" : "NONE", "_XC_DERIV_" :  "PW",
+                          # CUTOFF in RYDBERG AND NUMBER OF GRIDS
+                          "_CUTOFF_" : 600, "_REL_CTOFF_" : 60, "_NGRIDS_" : 4, 
+                          # The functional
+                          "_CP2K_XC_FUNCTIONAL_" : None,
+                          # ADMM (for hybrid functional)
+                          "_ADMM_" : 0, "_BASIS_AUX_FILE_" : "BASIS_ADMM_UZH",
+                          # Extrapolation strategy for the wavefunction
+                          "_EXTRAPOLATION_" : "ASPC", "_EXTRA_ORDER_" : "3",
+                          # GPAW
+                          "_USE_GAPW_" : 1,
+                          # OT PARAMETERS
+                          "_OT_PRECONDITIONER_" : "FULL_SINGLE_INVERSE",
+                          "_OT_MINIMIZER_" : "DIIS",
+                          # THE PARAMETERS OF THE STRUCTURE in ANGSTROM (IF RESTART IS 1 then this is override)
+                          "_A_" : 0.0, "_B_" : 0.0, "_C_" : 0.0,
+                          # If THERE NO RESTART FILE IS GIVEN THE SIMULATION WILL START FROM THIS STRUCTURE FILE
+                           "_COORD_FILE_FORMAT_" : "xyz", "_COORD_FILE_NAME_" : "structure.xyz",
+                          # KINDS ATOMS AND BASIS SET
+                           "_KINDS_BASIS_SET_" : None,
+                          # POLARIZATION
+                          "_USE_BERRY_" : 0,
+                          # COMPUTE WANNIER CENTERS, CUBES and MOLECULAR STATES CUBE
+                          "_PRINT_WANNIER_" : 0,
+                          # COMPUTE ELECTRON DENSITY CUBE and MO CUBES
+                          "_PRINT_E_CUBE_" : 0,
+                          # COMPUTE DOS and PDOS
+                          "_PRINT_DOS_" : 0
+                          }
+        
+        # THIS IS SET TO TRUE AFTER CALLING initialize
         self.initialized = False
         
         # Setup the attribute control
@@ -182,16 +232,27 @@ module load cp2k/2024.3\n
         cp2k_dict    = load_dict_from_json(where_dict_cp2k)
 
         # Check for compatibility
-        if len(cp2k_dict)    != len(self.cp2k_dict):
+        
+        if not(cp2k_dict["_RTYPE_"] in self.RTYPE_AVAILABLE):
+            raise ValueError("The RTYPE {} is not available, please choose between {}".format(cp2k_dict["RTYPE"], self.RTYPE_AVAILABLE))
+        
+        if cp2k_dict["_RTYPE_"] == "MD" and len(cp2k_dict)    != len(self.cp2k_dict):
+            raise ValueError('The two cp2k dictionaries do not match')
+        elif cp2k_dict["_RTYPE_"] != "MD" and len(cp2k_dict) != len(self.cp2k_elec_dict):
             raise ValueError('The two cp2k dictionaries do not match')
 
         if len(cluster_dict) != len(self.cluster_dict):
             raise ValueError('The two cluster dictionaries do not match')
 
         # Check consistency between the keys
-        for key in self.cp2k_dict.keys():
-            if not(key in cp2k_dict):
-                raise ValueError('The cp2k dictionary has {} missing'.format(key))
+        if cp2k_dict["_RTYPE_"] == "MD":
+            for key in self.cp2k_dict.keys():
+                if not(key in cp2k_dict):
+                    raise ValueError('The cp2k dictionary has {} missing'.format(key))
+        else:
+            for key in self.cp2k_elec_dict.keys():
+                if not(key in cp2k_dict):
+                    raise ValueError('The cp2k dictionary has {} missing'.format(key))
 
         # Check consistency between the keys
         for key in self.cluster_dict.keys():
@@ -200,17 +261,23 @@ module load cp2k/2024.3\n
 
         # Updates the dictionaries
         self.cp2k_dict    = copy.deepcopy(cp2k_dict)
+        #POSSIBILE
+        # if cp2k_dict["RTYPE"] == "MD":
+        #     self.cp2k_dict    = copy.deepcopy(cp2k_dict)
+        # else:
+        #     self.cp2k_elec_dict = copy.deepcopy(cp2k_dict)
 
         self.cluster_dict = copy.deepcopy(cluster_dict)
 
-        if "NPT" in self.cp2k_dict["_CALCTYPE_"] and bool(self.cp2k_dict["_XC_SMOOTH_RHO_"]!="NONE"):
-            raise ValueError("The smoothing procedure to get the pressure should be tested")
+        if self.cp2k_dict["_RTYPE_"] == "MD":
+            if "NPT" in self.cp2k_dict["_CALCTYPE_"] and bool(self.cp2k_dict["_XC_SMOOTH_RHO_"]!="NONE"):
+                raise ValueError("The smoothing procedure to get the pressure should be tested")
 
-        if "NVT" in self.cp2k_dict["_CALCTYPE_"] and not bool(self.cp2k_dict["_XC_SMOOTH_RHO_"]!="NONE"):
-            #raise ValueWarning("In NVT considering the smoothing procedure")
-            print("WARNING: consider using the smoothing procedure in NVT")
+            if "NVT" in self.cp2k_dict["_CALCTYPE_"] and not bool(self.cp2k_dict["_XC_SMOOTH_RHO_"]!="NONE"):
+                #raise ValueWarning("In NVT considering the smoothing procedure")
+                print("WARNING: consider using the smoothing procedure in NVT")
         # Check that the CP2k functional and the parameterization of the VDW are consistent
-        # Otherwis an error wil be raised
+        # Otherwise an error wil be raised
         dft_functional_used  = self.cp2k_dict["_CP2K_XC_FUNCTIONAL_"].split()[1]
         # Check for a specific parametrization of the XC functional
         if "PARAMETRIZATION" in self.cp2k_dict["_CP2K_XC_FUNCTIONAL_"].split():
@@ -221,9 +288,16 @@ module load cp2k/2024.3\n
         if self.cp2k_dict["_VDW3_FUNCTIONAL_"] != dft_functional_used:
             raise ValueError("The DFT xc is {} whereas the D3 parametrization is {}".format(dft_functional_used, self.cp2k_dict["_VDW3_FUNCTIONAL_"]))
 
-        if not ".xyz" in self.structure_file:
-            raise ValueError("Please use a xyz file structure in ANGSTROM")
+        #TODO: ADD CHOICE BETWEEN TRAJ AND XYZ FILES. FOR NOW ONLY XYZ IS IMPLEMENTED
+        if self.cp2k_dict["_RTYPE_"] in ("ENERGY","ENERGY_FORCE") and not ".traj" in self.structure_file:
+            raise ValueError("Please use a traj file for POST-SCF calculation")
+        elif self.cp2k_dict["_RTYPE_"] == "MD" and not ".xyz" in self.structure_file:
+            raise ValueError("Please use a xyz file structure in ANGSTROM for MD simulation")
 
+        print("You are going to run a {} calculation with {} batches".format(self.cp2k_dict["_RTYPE_"], self.n_batches))
+        SURE= input("Are you sure? [YES] or NO ")
+        if SURE == "NO":
+            raise ValueError("The creation of the batches has been killed!")
         self.initialized = True
 
         return 
@@ -233,10 +307,10 @@ module load cp2k/2024.3\n
 
     def create_inp_cp2k(self, dictionary):
         """
-        CREATE THE INPUT FOR NPT, NVT, SPE SIMULATIONS in CP2K
+        CREATE THE INPUT FOR NPT, NVT, REFTRAJ and SPE SIMULATIONS in CP2K
         """
 
-        input_text = """
+        input_text_MD = """
 @SET RESTART        _REST_
 @SET RTYPE          _RTYPE_
 @SET BASIS_POT_PATH _BASIS_POT_PATH_
@@ -395,7 +469,6 @@ module load cp2k/2024.3\n
                 MD 50
             &END EACH
         &END MULLIKEN
-        @ENDIF
 
         &HIRSHFELD
             FILENAME =${SYSTEM}-Hirshfeld_charges.dat
@@ -411,11 +484,26 @@ module load cp2k/2024.3\n
 
   @IF (${RTYPE} = ENERGY_FORCE )
   &PRINT
+    &PROGRAM_RUN_INFO
+      FILENAME =${SYSTEM}-1.ener
+      LOG_PRINT_KEY
+      &EACH
+        JUST_ENERGY 1
+      &END EACH
+      ADD_LAST NUMERIC
+    &END PROGRAM_RUN_INFO
     &FORCES
       &EACH JUST_ENERGY
       &END EACH
       ADD_LAST NUMERIC
     &END FORCES
+    &STRESS_TENSOR
+      &EACH JUST_ENERGY
+      &END EACH
+      ADD_LAST NUMERIC
+      FILENAME =${SYSTEM}-1.stress
+      LOG_PRINT_KEY
+    &END STRESS_TENSOR
   &END PRINT
   @ENDIF
 
@@ -532,6 +620,283 @@ module load cp2k/2024.3\n
 &END EXT_RESTART
 @endif
             """
+        input_text_ELEC = """
+@SET RESTART        _REST_
+@SET RTYPE          _RTYPE_
+@SET BASIS_POT_PATH _BASIS_POT_PATH_
+@SET BASIS_FILE     _BASIS_FILE_
+@SET BASIS_AUX_FILE _BASIS_AUX_FILE_ 
+@SET POT_FILE       _POT_FILE_
+@SET SYSTEM         _SYSTEM_
+@SET VDW            _VDW_
+@SET VDW_EXCLU      _VdW_EXCLU_
+@SET GEN            _GEN_
+@SET USE_GAPW       _USE_GAPW_
+@SET PRINT_P_BERRY  _USE_BERRY_
+@SET ADMM           _ADMM_
+@SET PRINT_WANNIER  _PRINT_WANNIER_
+@SET PRINT_E_CUBE   _PRINT_E_CUBE_
+@SET PRINT_DOS      _PRINT_DOS_
+        
+&GLOBAL
+  PROJECT     ${SYSTEM}
+  RUN_TYPE    ${RTYPE}
+  PRINT_LEVEL MEDIUM
+  FLUSH_SHOULD_FLUSH 
+&END GLOBAL
+
+&FORCE_EVAL
+
+  METHOD QuickStep
+
+  @IF ( ${RTYPE} = ENERGY_FORCE)
+  STRESS_TENSOR DIAGONAL_ANALYTICAL
+  @ENDIF
+
+  &DFT
+    BASIS_SET_FILE_NAME ${BASIS_POT_PATH}/${BASIS_FILE}
+    @IF ${ADMM}
+    BASIS_SET_FILE_NAME ${BASIS_POT_PATH}/${BASIS_AUX_FILE}
+    @ENDIF
+    POTENTIAL_FILE_NAME ${BASIS_POT_PATH}/${POT_FILE}
+
+    @IF ${RESTART}
+    WFN_RESTART_FILE_NAME _RES_WFN_FILE_
+    @ENDIF
+
+    &MGRID
+      CUTOFF [Ry]       _CUTOFF_
+      NGRIDS            _NGRIDS_
+      REL_CUTOFF [Ry]   _REL_CTOFF_
+    &END MGRID
+
+    &QS
+      EPS_DEFAULT 1.0E-14    # def=1.0E-10
+      @IF ${ADMM}
+      EPS_PGF_ORB 1.0E-6     # def=sqrt(EPS_DEFAULT) precision of overlap matrix elements
+      MIN_PAIR_LIST_RADIUS -1
+      @ENDIF
+      EXTRAPOLATION _EXTRAPOLATION_    #Extrapolation strategy for the wavefunction, ASPC recommended for MD, PS for SPE
+      EXTRAPOLATION_ORDER _EXTRA_ORDER_   #Default is 3
+      @IF ${USE_GAPW}
+          METHOD GAPW          # Gaussian Augumented Plane Waves
+          QUADRATURE   GC_LOG  # Algorithm to construct the atomic radial grid for GAPW
+          EPSFIT       1.E-6   # Precision to give the extension of a hard gaussian
+          EPSISO       1.0E-12 # Precision to determine an isolated projector
+          EPSRHO0      1.E-8   # Precision to determine the range of V(rho0-rho0soft)
+          # LMAXN0       4
+          # LMAXN1       6
+          # ALPHA0_H     10 # Exponent for hard compensation charge
+      @ENDIF
+    &END QS
+
+    &SCF
+      @IF ${RESTART}
+      SCF_GUESS RESTART
+      @ENDIF
+      EPS_SCF 1.0E-7 # def=1.0E-5 the exponent should be half of EPS_DEFAULT
+      MAX_SCF 50   # def=50
+      &OUTER_SCF
+        EPS_SCF 1.0E-7 # def=1.0E-5
+        MAX_SCF 50
+      &END OUTER_SCF
+      MAX_ITER_LUMO 2000
+      &OT T
+        PRECONDITIONER _OT_PRECONDITIONER_ # Example FULL_SINGLE_INVERSE, FULL_KINETIC
+        MINIMIZER      _OT_MINIMIZER_      # Example DIIS
+      &END OT
+    &END SCF
+
+    &XC
+
+      _CP2K_XC_FUNCTIONAL_
+
+      &XC_GRID
+         XC_SMOOTH_RHO  _XC_SMOOTH_RHO_
+         XC_DERIV       _XC_DERIV_
+      &END XC_GRID
+
+      @IF ${VDW}
+      &vdW_POTENTIAL
+        DISPERSION_FUNCTIONAL PAIR_POTENTIAL
+        &PAIR_POTENTIAL
+#          CALCULATE_C9_TERM .TRUE. # Include the 3-body term
+#          REFERENCE_C9_TERM .TRUE.
+          TYPE DFTD3
+          LONG_RANGE_CORRECTION .TRUE.
+          PARAMETER_FILE_NAME ${BASIS_POT_PATH}/dftd3.dat
+          VERBOSE_OUTPUT .TRUE.
+          REFERENCE_FUNCTIONAL _VDW3_FUNCTIONAL_
+          R_CUTOFF [angstrom] _RCvdw_ # def=10 angstrom
+          EPS_CN 1.0E-6  # def=1.0E-6 dp cutoff value for coordination number function
+          @IF ${VDW_EXCLU}
+            D3_EXCLUDE_KIND _VDW3_EXCLUDE_ATOM_ # Exclude the Na atom type 3
+          @ENDIF
+        &END PAIR_POTENTIAL
+      &END vdW_POTENTIAL
+      @ENDIF
+    &END XC
+
+    @IF ${ADMM}
+    &AUXILIARY_DENSITY_MATRIX_METHOD
+      ADMM_TYPE ADMMS
+      EXCH_CORRECTION_FUNC PBEX
+    &END AUXILIARY_DENSITY_MATRIX_METHOD
+    @ENDIF
+
+    @IF ${PRINT_WANNIER}
+    &LOCALIZE
+       &PRINT
+          &WANNIER_CUBES
+            FILENAME WANNIER_FILES/
+          &END WANNIER_CUBES
+          &WANNIER_CENTERS
+             FILENAME WANNIER_FILES/WANNIER_CENTERS
+             FORMAT XYZ
+             IONS+CENTERS TRUE
+          &END WANNIER_CENTERS
+           &MOLECULAR_STATES
+              &CUBES
+                 FILENAME MOLECULAR_STATES/MOLECULAR_STATES
+              &END CUBES
+           &END MOLECULAR_STATES
+       &END PRINT
+    &END LOCALIZE
+    @ENDIF
+    
+    &PRINT
+        @IF ${PRINT_E_CUBE}
+        &E_DENSITY_CUBE SILENT
+          STRIDE 1
+        &END E_DENSITY_CUBE
+        @ENDIF
+        &MO_CUBES
+          FILENAME MO_CUBE_FILE/
+          &EACH
+            JUST_ENERGY  1
+          &END EACH
+          NHOMO       2
+          NLUMO       2
+          WRITE_CUBE  False
+          @IF ${PRINT_E_CUBE}
+          WRITE_CUBE   True
+          @ENDIF
+        &END MO_CUBES
+        
+        @IF ${PRINT_DOS}
+        &DOS ON
+          LOG_PRINT_KEY T
+          DELTA_E 0.0005
+          FILENAME DOS/
+        &END DOS
+        &PDOS ON
+          OUT_EACH_MO 1
+          FILENAME DOS/
+          NLUMO 2
+        &END PDOS
+        @ENDIF
+
+        @IF ${PRINT_P_BERRY}
+        &MOMENTS ON
+            COMMON_ITERATION_LEVELS 20000
+            FILENAME =${SYSTEM}-1.dipoles
+            ADD_LAST NUMERIC
+            REFERENCE COM
+            &EACH
+              JUST_ENERGY 1
+            &END EACH
+        &END MOMENTS
+        
+        &MULLIKEN SILENT
+            FILENAME =${SYSTEM}-Mulliken_charges.dat
+            &EACH
+                JUST_ENERGY 1
+            &END EACH
+        &END MULLIKEN
+        &HIRSHFELD
+            FILENAME =${SYSTEM}-Hirshfeld_charges.dat
+            EACH
+                JUST_ENERGY 1
+            &END EACH
+        &END HIRSHFELD
+
+        @ENDIF
+    &END PRINT
+
+  &END DFT
+
+  @IF (${RTYPE} = ENERGY_FORCE )
+  &PRINT
+    &PROGRAM_RUN_INFO
+      FILENAME =${SYSTEM}-1.ener
+      LOG_PRINT_KEY
+      &EACH
+        JUST_ENERGY 1
+      &END EACH
+      ADD_LAST NUMERIC
+    &END PROGRAM_RUN_INFO
+    &FORCES
+      &EACH JUST_ENERGY
+      &END EACH
+      FILENAME =${SYSTEM}-1.force
+      ADD_LAST NUMERIC
+    &END FORCES
+    &STRESS_TENSOR
+      &EACH JUST_ENERGY
+      &END EACH
+      ADD_LAST NUMERIC
+      FILENAME =${SYSTEM}-1.stress
+      LOG_PRINT_KEY
+    &END STRESS_TENSOR
+  &END PRINT
+  @ENDIF
+ 
+
+  &SUBSYS
+
+    &CELL
+      ABC [angstrom]     _A_ _B_ _C_
+    &END CELL
+
+
+    &TOPOLOGY
+      CONNECTIVITY OFF
+      COORD_FILE_FORMAT _COORD_FILE_FORMAT_
+      COORD_FILE_NAME   ./_COORD_FILE_NAME_
+      @IF ${GEN}
+      CONNECTIVITY GENERATE
+      &GENERATE
+        CREATE_MOLECULES T
+        BONDLENGTH_MAX 1.8
+        REORDER F
+        &ISOLATED_ATOMS
+          LIST 1 2 3
+        &END ISOLATED_ATOMS
+      &END GENERATE
+      &DUMP_PSF
+      &END DUMP_PSF
+      &DUMP_PDB 
+      &END DUMP_PDB
+      @ENDIF
+    &END TOPOLOGY
+    
+    @IF ${GEN}
+    &PRINT
+      &ATOMIC_COORDINATES
+        FILENAME =${SYSTEM}.xyz
+      &END ATOMIC_COORDINATES
+    &END PRINT
+    @ENDIF
+
+    _KINDS_BASIS_SET_
+
+    &END SUBSYS
+&END FORCE_EVAL
+"""
+        if self.cp2k_dict["_RTYPE_"] == "MD":
+            input_text = copy.deepcopy(input_text_MD)
+        else:
+            input_text = copy.deepcopy(input_text_ELEC)
 
         def is_all_upper(s):
             return s.isupper() and len(s) > 0
@@ -543,7 +908,7 @@ module load cp2k/2024.3\n
             input_text = input_text.replace(key, "{}".format(value))
             # print(input_text == pre_input_text)
             # print(input_text)
-            if input_text == pre_input_text and not(key in ["_full_RES_FILE_"]):
+            if input_text == pre_input_text and not(key in ["_full_RES_FILE_", "_TWO_STEPS_CALC_"]):
                 raise ValueError("KEY {} NOT FOUND, please check the text of the cp2k calculation".format(key))
 
         
@@ -629,7 +994,7 @@ module load cp2k/2024.3\n
 
         Each batch will contain an MD simulation to run on a supercomputer
 
-        After each batch has finisched the restart file is used to start the nest simulation
+        After each batch has finisched the restart file is used to start the next simulation
 
 
         Parameters:
@@ -658,6 +1023,13 @@ module load cp2k/2024.3\n
             id_traj = np.sort(np.random.choice(len(traj_file)+1, size = self.cp2k_dict["_STEPS_"]*self.n_batches, replace=False))
             blocks_traj = [id_traj[i:i+self.cp2k_dict["_STEPS_"]].copy() for i in range(0,len(id_traj), self.cp2k_dict["_STEPS_"])]
 
+        # NEED TO MODIFIY THIS, READING ALL OF THE FILE FOR NOTHING
+        if self.cp2k_dict["_RTYPE_"] in ["ENERGY_FORCE", "ENERGY"]:
+            print("PREPARING THE STRUCTURES FILES FOR SPE CALCULATION\n")
+            struct_file = ase.io.read(self.structure_file,index=":")
+            rng = np.random.default_rng()
+            mask = np.sort(rng.choice(len(struct_file), size=self.n_batches, replace=False))
+
         # Add the +1 to have exactly n_batches directories
         for batch in range(self.n_batches_min, (self.n_batches + self.n_batches_min) ):
 
@@ -674,14 +1046,15 @@ module load cp2k/2024.3\n
               elif self.cp2k_dict["_CALCTYPE_"] == "REFTRAJ":
                    execution_dir = "BATCH_{:d}_REFTRAJ_steps_{:d}_".format(batch, self.cp2k_dict["_STEPS_"])
                 
-            elif self.cp2k_dict["_RTYPE_"] == "ENERGY_FORCE":
-                execution_dir = f"BATCH_{batch:d}_SPE_conf_{self.cp2k_dict['_STEPS_']:d}_"
+            elif self.cp2k_dict["_RTYPE_"] in ["ENERGY_FORCE", "ENERGY"]:
+                execution_dir = f"BATCH_{batch:d}_{self.cp2k_dict["_RTYPE_"]}_conf_{mask[batch-self.n_batches_min]:d}_"
             else:
-                print(f"Run type {self.cp2k_dict["_RTYPE"]} not implemented")
-                raise NotImplementedError("Please, choose between MD or ENERGY_FORCE")
+                # DOUBLE CHECK FOR COMPATIBILITY WITH INITIALIZE, NOT USEFUL. MAY REMOVE IN THE FUTURE
+                print(f"Run type {self.cp2k_dict["_RTYPE_"]} not implemented")
+                raise NotImplementedError("Please, choose between MD, ENERGY or ENERGY_FORCE")
                 
             # Add the structure file without the extension
-            execution_dir += os.path.basename(self.structure_file)[:-4] 
+            execution_dir += Path(self.structure_file).stem
             execution_dir_list.append(execution_dir)
             print("\n\n=> The execution dir will be {}\n".format(execution_dir))
 
@@ -690,13 +1063,13 @@ module load cp2k/2024.3\n
             if batch == self.n_batches_min:
                 # Update this variable of cp2k dictionary
                 print('Hello! This is batch {} we will start the calculation from\nFILE={}'.format(self.n_batches_min, self.restart_file))
-                SURE = input('Are you ok with this decision? YES or NO ')
+                SURE = input('Are you ok with this decision? [YES] or NO ')
                 if SURE == "NO":
                     raise ValueError("The restart file is wrong according to you! The creation of the batches has been killed!")
                 
                 # Check if the scratch directory is ok
                 print('The scratch directory will be\n{}'.format(self.cluster_dict["cluster_scratch"]))
-                SURE_scratch = input('Are you ok with this decision? YES or NO ')
+                SURE_scratch = input('Are you ok with this decision? [YES] or NO ')
                 if SURE_scratch == "NO":
                     raise ValueError("The scratch dir is not correct according to you! The creation of the batches has been killed!")
                 self.cp2k_dict["_REST_"]       = int(np.copy(self.restart))
@@ -706,8 +1079,17 @@ module load cp2k/2024.3\n
                     SURE_reftraj = input("Are you sure ? YES or NO")
                     if SURE_reftraj == "NO":
                         raise ValueError("The RECOMPUTE traj is no correct according to you! The creation of the batches has been killed!")
+                # Check if you want to run a two steps calculation (PBE -> PBE0)
+                if self.cp2k_dict["_REST_"] == 1 and self.cp2k_dict["_RTYPE_"] in ("ENERGY","ENERGY_FORCE"):
+                    raise NotImplementedError("Restart for ENERGY and ENERGY_FORCE is not implemented for the moment")
+                if self.cp2k_dict["_RTYPE_"] in ["ENERGY", "ENERGY_FORCE"] and self.cp2k_dict["_ADMM_"] == 1 and self.cp2k_dict["_REST_"] ==0:
+                    SURE_hybrid = input("Would you like to run DFT calculation before Hybrid ? YES or [NO]")
+                    if SURE_hybrid == "YES":
+                        self.cp2k_dict["_TWO_STEPS_CALC_"] = 1
+                    else:
+                        self.cp2k_dict["_TWO_STEPS_CALC_"] = 0
             # If it is not the first batch we should force the restart from the previous batch
-            else:
+            elif self.cp2k_dict["_RTYPE_"] == "MD":
                 # Update this variable of cp2k dictionary
                 self.cp2k_dict["_REST_"]       = 1
                 # self.cp2k_dict["_full_RES_FILE_"] = os.path.join(self.cluster_dict["cluster_scratch"], execution_dir_list[-2])
@@ -721,16 +1103,20 @@ module load cp2k/2024.3\n
             print("\n==> Right now I am in {}".format(os.getcwd()))
         
             # Copy the structure file previously built .xyz (obtained from a structural relaxation)
-            subprocess.run(["cp", self.structure_file, os.path.join("./", self.cp2k_dict["_COORD_FILE_NAME_"])], check = True)
-            if self.cp2k_dict["_CALCTYPE_"] == "REFTRAJ":
-                ase.io.write(os.path.join("./", "traj.xyz"), [traj_file[i] for i in blocks_traj[batch-1-self.n_batches_min].tolist()], format="xyz")
-                n=0
-                for line in fileinput.input(os.path.join("./", "traj.xyz"), inplace=True):
-                    if line.strip() == "":
-                        print(f"i={n}")
-                        n +=1
-                    else:
-                        print(line, end="")
+            if self.cp2k_dict["_RTYPE_"] == "MD":
+                subprocess.run(["cp", self.structure_file, os.path.join("./", self.cp2k_dict["_COORD_FILE_NAME_"])], check = True)
+                if self.cp2k_dict["_CALCTYPE_"] == "REFTRAJ":
+                    ase.io.write(os.path.join("./", "traj.xyz"), [traj_file[i] for i in blocks_traj[batch-1-self.n_batches_min].tolist()], format="xyz")
+                    n=0
+                    for line in fileinput.input(os.path.join("./", "traj.xyz"), inplace=True):
+                        if line.strip() == "":
+                            print(f"i={n}")
+                            n +=1
+                        else:
+                            print(line, end="")
+            else:
+                ase.io.write(os.path.join("./", self.cp2k_dict["_COORD_FILE_NAME_"]),struct_file[mask[batch-self.n_batches_min]], format="xyz")
+
             # Copy the restart file of a previous batch if this is the first batch to submit
             if batch == self.n_batches_min:
                 if self.restart:
@@ -739,14 +1125,16 @@ module load cp2k/2024.3\n
              
 
             # Create the cp2k input
-            if   self.cp2k_dict["_CALCTYPE_"] == "NVT":
+            if self.cp2k_dict["_RTYPE_"] in ["ENERGY", "ENERGY_FORCE"]:
+                self.create_inp_cp2k(self.cp2k_dict)
+            elif self.cp2k_dict["_CALCTYPE_"] == "NVT":
                 self.create_inp_cp2k(self.cp2k_dict)
             elif self.cp2k_dict["_CALCTYPE_"] == "NPT_I":
                 self.create_inp_cp2k(self.cp2k_dict)
             elif self.cp2k_dict["_CALCTYPE_"] == "REFTRAJ":
                 self.create_inp_cp2k(self.cp2k_dict)
             else:
-                raise NotImplementedError("NPT_I, NVT and REFTRAJ are the only implemented")
+                raise NotImplementedError("NPT_I, NVT and REFTRAJ are the only implemented for MD, ENERGY and ENERGY_FORCE are the only implemented for SPE")
         
 
             # Save the dictionary with all the input data
@@ -918,15 +1306,39 @@ module load cp2k/2024.3\n
         allfiles = os.listdir("./")
         for myfile in allfiles:
             if myfile.endswith(".inp"):
-                print("PARACELSUS| You are running {} \n".format(myfile))
-                file.write("""
+                if self.cp2k_dict["_RTYPE_"] == "MD" or self.cp2k_dict["_TWO_STEPS_CALC_"] == 0:
+                    print("PARACELSUS| You are running {} \n".format(myfile))
+                    file.write("""
 cd {}
 {} {} -i {} -o output.out
     
 """.format(os.path.join(self.cluster_dict["cluster_scratch"], execution_dir),
                self.cluster_dict["mpirun"],  self.cluster_dict["exe"], myfile))
 
-        if batch_index > 0:
+                elif self.cp2k_dict["_TWO_STEPS_CALC_"] == 1:
+                    print(f"IRENE| You are running {myfile} with a two steps calculation")
+                    file.write(fr"""
+cd {os.path.join(self.cluster_dict["cluster_scratch"], execution_dir)}
+
+sed -e '/@SET PRINT_P_BERRY/,/@SET PRINT_DOS/c\
+@SET PRINT_P_BERRY  0\n@SET ADMM           0\n@SET PRINT_WANNIER  0\n@SET PRINT_E_CUBE   0\n@SET PRINT_DOS      0
+' {myfile} > input_pbe.inp
+chmod g+s ./input_pbe.inp
+
+{self.cluster_dict["mpirun"]} {self.cluster_dict["exe"]} -i input_pbe.inp -o output_pbe.out
+
+if grep -q "SCF run NOT" output_pbe.out || grep -q "ABORT" output_pbe.out; then
+    echo 'WARNING : run not converged or job aborted
+    Next job cancelled'
+else
+    rm -f input_pbe.inp
+    sed -i "/@SET RESTART/c\@SET RESTART        1" {myfile}
+    mv ./{self.cp2k_dict["_SYSTEM_"]}-RESTART.wfn ./{self.cp2k_dict["_RES_WFN_FILE_"]}
+fi
+    {self.cluster_dict["mpirun"]} {self.cluster_dict["exe"]} -i {myfile} -o output.out
+""")
+
+        if batch_index > 0 and self.cp2k_dict["_RTYPE_"] == "MD":
             final_dir  = execution_dir.replace("BATCH_{}".format(batch_index), "BATCH_{}".format(batch_index + 1))
             final_path = os.path.join(self.cluster_dict["cluster_scratch"], final_dir)
             #check on the convergence of the SCF caclculation with if
@@ -1025,15 +1437,40 @@ set -x
         allfiles = os.listdir("./")
         for myfile in allfiles:
             if myfile.endswith(".inp"):
-                print("JEAN-ZAY| You are running {} \n".format(myfile))
-                file.write("""
+                if self.cp2k_dict["_RTYPE_"] == "MD" or self.cp2k_dict["_TWO_STEPS_CALC_"] == 0:
+                    print("JEAN-ZAY| You are running {} \n".format(myfile))
+                    file.write("""
 cd {}
 {} {} -i {} -o output.out
     
 """.format(os.path.join(self.cluster_dict["cluster_scratch"], execution_dir),
                self.cluster_dict["mpirun"],  self.cluster_dict["exe"], myfile))
 
-        if batch_index > 0:
+                elif self.cp2k_dict["_TWO_STEPS_CALC_"] == 1:
+                    print(f"IRENE| You are running {myfile} with a two steps calculation")
+                    file.write(fr"""
+cd {os.path.join(self.cluster_dict["cluster_scratch"], execution_dir)}
+
+sed "/@SET PRINT_P_BERRY/,/@SET PRINT_DOS/c\
+@SET PRINT_P_BERRY  0\n@SET ADMM           0\n@SET PRINT_WANNIER  0\n@SET PRINT_E_CUBE   0\n@SET PRINT_DOS      0\n
+" {myfile} > input_pbe.inp
+chmod g+s ./input_pbe.inp
+
+{self.cluster_dict["mpirun"]} {self.cluster_dict["exe"]} -i input_pbe.inp -o output_pbe.out
+
+if grep -q "SCF run NOT" output_pbe.out || grep -q "ABORT" output_pbe.out; then
+    echo 'WARNING : run not converged or job aborted
+    Next job cancelled'
+else
+    rm -f input_pbe.inp
+    sed -i "/@SET RESTART/c\@SET RESTART        1" {myfile}
+    mv ./{self.cp2k_dict["_SYSTEM_"]}-RESTART.wfn ./{self.cp2k_dict["_RES_WFN_FILE_"]}
+
+    {self.cluster_dict["mpirun"]} {self.cluster_dict["exe"]} -i {myfile} -o output.out
+fi
+""")
+
+        if batch_index > 0 and self.cp2k_dict["_RTYPE_"] == "MD":
             final_dir  = execution_dir.replace("BATCH_{}".format(batch_index), "BATCH_{}".format(batch_index + 1))
             final_path = os.path.join(self.cluster_dict["cluster_scratch"], final_dir)
             #check on the convergence of the SCF caclculation with if
@@ -1136,15 +1573,40 @@ set -x
         allfiles = os.listdir("./")
         for myfile in allfiles:
             if myfile.endswith(".inp"):
-                print("IRENE| You are running {} \n".format(myfile))
-                file.write("""
+                if self.cp2k_dict["_RTYPE_"] == "MD" or self.cp2k_dict["_TWO_STEPS_CALC_"] == 0:
+                    print("IRENE| You are running {} \n".format(myfile))
+                    file.write("""
 cd {}
 {} {} -i {} -o output.out
     
 """.format(os.path.join(self.cluster_dict["cluster_scratch"], execution_dir),
                self.cluster_dict["mpirun"],  self.cluster_dict["exe"], myfile))
 
-        if batch_index > 0:
+                elif self.cp2k_dict["_TWO_STEPS_CALC_"] == 1:
+                    print(f"IRENE| You are running {myfile} with a two steps calculation")
+                    file.write(fr"""
+cd {os.path.join(self.cluster_dict["cluster_scratch"], execution_dir)}
+
+sed "/@SET PRINT_P_BERRY/,/@SET PRINT_DOS/c\
+@SET PRINT_P_BERRY  0\n@SET ADMM           0\n@SET PRINT_WANNIER  0\n@SET PRINT_E_CUBE   0\n@SET PRINT_DOS      0\n
+" {myfile} > input_pbe.inp
+chmod g+s ./input_pbe.inp
+
+{self.cluster_dict["mpirun"]} {self.cluster_dict["exe"]} -i input_pbe.inp -o output_pbe.out
+
+if grep -q "SCF run NOT" output_pbe.out || grep -q "ABORT" output_pbe.out; then
+    echo 'WARNING : run not converged or job aborted
+    Next job cancelled'
+else
+    rm -f input_pbe.inp
+    sed -i "/@SET RESTART/c\@SET RESTART        1" {myfile}
+    mv ./{self.cp2k_dict["_SYSTEM_"]}-RESTART.wfn ./{self.cp2k_dict["_RES_WFN_FILE_"]}
+
+    {self.cluster_dict["mpirun"]} {self.cluster_dict["exe"]} -i {myfile} -o output.out
+fi
+""")
+
+        if batch_index > 0 and self.cp2k_dict["_RTYPE_"] == "MD":
             final_dir  = execution_dir.replace("BATCH_{}".format(batch_index), "BATCH_{}".format(batch_index + 1))
             final_path = os.path.join(self.cluster_dict["cluster_scratch"], final_dir)
             #check on the convergence of the SCF caclculation with if

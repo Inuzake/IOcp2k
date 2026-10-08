@@ -4,8 +4,13 @@ IOcp2k.egg-info/SOURCES.txt
 IOcp2k.egg-info/dependency_links.txt
 IOcp2k.egg-info/requires.txt
 IOcp2k.egg-info/top_level.txt
+Modules/AnalyseMace.py
 Modules/AtomicSnapshots.py
+Modules/Cavity.py
+Modules/ClustersAnalysis.py
+Modules/Conductivity.py
 Modules/MDBunches.py
+Modules/POSTBunches.py
+Modules/Vibrational.py
 Modules/__init__.py
-Modules/get_pair_correlation_function.py
 Modules/test.py
