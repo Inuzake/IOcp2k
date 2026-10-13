@@ -582,7 +582,7 @@ class AtomicSnapshots:
         # Set up the unit cell in Angstrom
         self.unit_cell = np.copy(unit_cell)
         
-        avail_calc_type = ['GEO_OPT', 'MD']
+        avail_calc_type = ['GEO_OPT', 'MD', 'SPE']
         if not(calc_type in avail_calc_type):
             raise ValueError('Choose calc_type among {}'.format(avail_calc_type))
         self.calc_type = calc_type
@@ -599,6 +599,8 @@ class AtomicSnapshots:
         self.N_atoms = int(lines[0])
         # Get the number of MD, GEO_OPT steps
         for index, line in enumerate(lines):
+            if self.calc_type == "SPE":
+                self.snapshots = 1
             if line.startswith(' i ='):
                 self.snapshots += 1
             if calc_type == 'MD':
@@ -651,7 +653,8 @@ class AtomicSnapshots:
             file_index = isnap * (self.N_atoms + 2) + 2
             
             # This is the potential energy
-            self.energies[isnap] = float(lines[file_index - 1].split()[-1])
+            if self.calc_type in ("GEO_OPT", "MD"):
+                self.energies[isnap] = float(lines[file_index - 1].split()[-1])
             for iatom in range(self.N_atoms):
                 coords = np.asarray(lines[file_index + iatom].split()[1:])
                 self.positions[isnap, iatom, :] = coords
@@ -684,18 +687,23 @@ class AtomicSnapshots:
 
             # Read the atomic positions of each snapshots
             for isnap in range(self.snapshots):
-                # The index where the forces start
-                file_index = isnap * (self.N_atoms + 2) + 2
+                if self.calc_type in ("MD","GEO_OPT"):
+                    # The index where the forces start
+                    file_index = isnap * (self.N_atoms + 2) + 2
 
-                # Read the force for the atoms
-                for iatom in range(self.N_atoms):
-                    atom_force = np.asarray(lines[file_index + iatom].split()[1:])
-                    self.forces[isnap, iatom, :] = atom_force
+                    # Read the force for the atoms
+                    for iatom in range(self.N_atoms):
+                        atom_force = np.asarray(lines[file_index + iatom].split()[1:])
+                        self.forces[isnap, iatom, :] = atom_force
 
-                if debug:
-                    print('FORCES SNAP={}'.format(isnap))
-                    print(self.forces[isnap,:,:])
-                    print()
+                    if debug:
+                        print('FORCES SNAP={}'.format(isnap))
+                        print(self.forces[isnap,:,:])
+                        print()
+                if self.calc_type == "SPE":
+                    for iatom in range(self.N_atoms):
+                        atom_force = np.asarray(lines[4+ iatom].split()[3:])
+                        self.forces[isnap, iatom, :] = atom_force
             # Close the file
             file_force.close()
         
@@ -705,6 +713,7 @@ class AtomicSnapshots:
         
         
         ####### READ THE STRESS FILE ########
+        #TODO: implement SPE possibility for reading the stress file
         units_bar = False
         if not(ext_stress is None):
             if not os.path.exists(file_name_head + ext_stress):
@@ -783,10 +792,13 @@ class AtomicSnapshots:
             lines = file_ener.readlines()
 
             for isnap in range(self.snapshots):
-                self.kinetic_energies[isnap]   = float(lines[isnap + 1].split()[2])
-                self.temperatures[isnap]       = float(lines[isnap + 1].split()[3])
-                self.potential_energies[isnap] = float(lines[isnap + 1].split()[4])
-                self.cons_quant[isnap]         = float(lines[isnap + 1].split()[5])
+                if self.calc_type in ("MD","GEO_OPT"):
+                    self.kinetic_energies[isnap]   = float(lines[isnap + 1].split()[2])
+                    self.temperatures[isnap]       = float(lines[isnap + 1].split()[3])
+                    self.potential_energies[isnap] = float(lines[isnap + 1].split()[4])
+                    self.cons_quant[isnap]         = float(lines[isnap + 1].split()[5])
+                if self.calc_type == "SPE":
+                    self.potential_energies[isnap] = float(lines[1].split()[-1])
             if self.calc_type == 'MD':
                 try:
                     self.dt = float(lines[2].split()[1]) - float(lines[1].split()[1])

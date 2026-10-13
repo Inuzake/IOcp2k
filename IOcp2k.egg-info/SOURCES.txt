@@ -10,7 +10,6 @@ Modules/Cavity.py
 Modules/ClustersAnalysis.py
 Modules/Conductivity.py
 Modules/MDBunches.py
-Modules/POSTBunches.py
 Modules/Vibrational.py
 Modules/__init__.py
 Modules/test.py
